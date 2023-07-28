@@ -1,0 +1,3 @@
+target = "master"
+milestone = "3.116.0"
+cmd = "rm -r ./build && npm ci && npm run test && npm run webapp"
