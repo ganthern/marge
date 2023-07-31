@@ -1,3 +1,13 @@
+/**
+ * * get all issues and PRs added to the milestone
+ * * for issues, get the linked PRs
+ * * (check the PRs for mentions of any issues that are in the milestone to recover unmentioned stuff)
+ * * make a list of all PRs and ask for an order
+ * * after order is gotten, rebase each branch onto its predecessor locally
+ * * wait for tests to finish
+ * * merge the branches from the bottom
+ */
+
 use clap::Parser;
 use serde::Deserialize;
 use std::fs;
@@ -24,6 +34,7 @@ struct AppConfig {
     target: String,
     milestone: String,
     cmd: String,
+    onfail: String
 }
 
 
@@ -40,7 +51,7 @@ fn parse_config(file_path: String) -> Result<AppConfig, AppErr> {
     toml::from_str(&contents).map_err(|_| AppErr::InvalidConfig)
 }
 
-fn get_milestone_issues(milestone: &str) -> Result<(), ()> {
+async fn get_milestone_issues(milestone: &str) -> Result<(), ()> {
     let octocrab = octocrab::Octocrab::builder()
         .build()?;
 
