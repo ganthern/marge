@@ -8,19 +8,28 @@ use serde::Deserialize;
 use tokio;
 use toml;
 use url::Url;
+mod remote;
+use crate::remote::get_remotes;
+/*
+app state machine
+
+INI initializing
+
+
+
+*/
 
 #[derive(Parser, Debug)]
 struct AppArgs {
     #[arg(long, default_value = "marge.toml")]
     config: String,
+    #[arg(long, default_value = "main")]
+    branch: String,
 }
 
 #[derive(Deserialize, Debug)]
 struct AppConfig {
     branch: String,
-    owner: String,
-    repo: String,
-    milestone: String,
     cmd: String,
     #[serde(default)]
     token: String,
@@ -29,26 +38,11 @@ struct AppConfig {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config = init().await?;
+    let remotes = get_remotes()?;
 
     let instance = Octocrab::builder().personal_token(config.token).build()?;
-    let commit_urls = get_pulls(&instance, &config.owner, &config.repo)
-        .await?
-        .into_iter()
-        .filter_map(|pull| pull.commits_url)
-        .map(|url| url.as_str().to_owned());
 
-    let commits_futures = commit_urls.map(|url| read_commits(&instance, url));
-    let commits_nested = futures::future::join_all(commits_futures).await;
-    let commits: Vec<Commit> = commits_nested.into_iter()
-    .filter(|c| c.is_ok())
-    .map(|c| c.unwrap())
-    .flatten()
-    .collect::<Vec<Commit>>();
-
-    let commit_messages = commits.into_iter().map(|c| c.commit.message).collect::<Vec<String>>();
-
-
-    println!("stuff {:#?}", commit_messages);
+    println!("stuff {:#?}", remotes);
 
     Ok(())
 }
@@ -81,51 +75,6 @@ async fn get_token(file_path: &str) -> anyhow::Result<String> {
     Ok(contents.to_owned())
 }
 
-async fn get_milestones(
-    instance: &Octocrab,
-    owner: &str,
-    repo: &str,
-) -> anyhow::Result<Vec<Milestone>> {
-    let path = format!("/repos/{}/{}/milestones", owner, repo);
-    instance
-        .get(path, None::<&()>)
-        .await
-        .context(format!("Failed to read milestones from {}", repo))
-}
-
-async fn get_milestone(instance: &Octocrab, config: &AppConfig) -> anyhow::Result<Milestone> {
-    let milestones: Vec<Milestone> = get_milestones(&instance, &config.owner, &config.repo).await?;
-    milestones
-        .into_iter()
-        .find(|m| m.title == config.milestone)
-        .context(format!(
-            "/repos/{}/{} has no milestone {}",
-            config.owner, config.repo, config.milestone
-        ))
-}
-
-async fn get_issues_for_milestone(
-    instance: &Octocrab,
-    owner: &str,
-    repo: &str,
-    milestone: &Milestone,
-) -> anyhow::Result<Vec<Issue>> {
-    instance
-        .issues(owner, repo)
-        .list()
-        .milestone(milestone.number)
-        .state(params::State::All)
-        .per_page(100)
-        .page(1u8)
-        .send()
-        .await
-        .context(format!(
-            "could not get issues for milestone {} in {}/{}",
-            milestone.title, owner, repo
-        ))
-        .map(|p: Page<Issue>| p.items)
-}
-
 async fn get_pulls(
     instance: &Octocrab,
     owner: &str,
@@ -141,12 +90,4 @@ async fn get_pulls(
         .await
         .context(format!("could not get pulls for repo {}/{}", owner, repo))
         .map(|p: Page<PullRequest>| p.items)
-}
-
-fn collect_pull_request_links(issues: Vec<Issue>) -> Vec<Url> {
-    println!("{}", issues.len());
-    issues
-        .into_iter()
-        .filter_map(|i| i.pull_request.map(|prl| prl.url))
-        .collect()
 }

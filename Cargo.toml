@@ -10,8 +10,13 @@ serde = "1.0.177"
 toml = "0.7.6"
 tokio = { version = "1.17", default-features = false, features = ["macros", "rt-multi-thread", "fs"] }
 clap = { version = "4.3.19", features = ["derive"] }
+regex = "1.9.1"
 futures = "0.3"
 tui = { version = "0.19.0", default-features = false, features = ["crossterm", "serde"] }
 octocrab = {path  = "../octocrab"}
 anyhow = "1.0.72"
 url = { version = "2.2.2", features = ["serde"] }
+
+[profile.release]
+opt-level = "z"
+lto = true

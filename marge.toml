@@ -1,5 +1,2 @@
 branch = "main"
-owner = "tutao"
-repo = "tutanota"
-milestone = "3.116.0"
-cmd = "rm -r ./build && npm ci && npm run test && node webapp"
+cmd = "rm -r ./build && npm ci && npm run test && node webapp"  
