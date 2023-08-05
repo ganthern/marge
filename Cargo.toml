@@ -3,11 +3,10 @@ name = "marge"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-license-file = "LICENSE.md"
+description = "marge helps you merge your PRs"
+authors = ["nig"]
 
 [dependencies]
-serde = "1.0.177"
-toml = "0.7.6"
 tokio = { version = "1.17", default-features = false, features = ["macros", "rt-multi-thread", "fs"] }
 clap = { version = "4.3.19", features = ["derive"] }
 regex = "1.9.1"

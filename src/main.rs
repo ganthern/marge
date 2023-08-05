@@ -1,22 +1,39 @@
-use anyhow::Context;
+use anyhow::{Context};
 use clap::Parser;
-use octocrab::{
-    models::{commits::Commit, issues::Issue, pulls::PullRequest, timelines::Milestone},
-    params, Octocrab, Page,
-};
-use serde::Deserialize;
+use octocrab::Octocrab;
 use tokio;
-use toml;
 mod git;
 use crate::git::{get_remotes, get_pulls};
 
 #[derive(Parser, Debug)]
+#[command(author, version, about, long_about)]
+#[command(
+    help_template = "{about-section} \n {usage-heading} \n\t {usage} \n\n {all-args} \n\n {name} v{version} ({author})"
+)]
+/// marge helps you merge your PRs
+/// 
+/// will get the PRs for the current git repositories' github page,
+/// then ask for a desired order to merge them in. after that, each branch will in turn be
+/// 
+/// * checked out
+///
+/// * rebased onto its predecessor
+/// 
+/// * validated with the command passed to marge
+/// 
+/// * force-pushed to github
+/// 
+/// if any step fails, marge will pause and notify so you can fix your stuff 
+/// before telling her to continue.
 struct AppArgs {
-    #[arg(long, default_value = "main", help = "the branch to merge the PRs to")]
+    #[arg(long, short, default_value = "main")]
+    /// the branch to rebase the PR chain onto
     branch: String,
-    #[arg(long, default_value = ".token", help = "git API token to use")]
+    #[arg(long, short, default_value = ".token")]
+    /// file to read the github API token from
     token: String,
-    #[arg( help = "the command to run to validate each rebased branch")]
+    #[arg()]
+    /// the sh command line marge should run to validate each rebased branch
     cmd: String,
 
 }
@@ -41,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn init() -> anyhow::Result<AppConfig> {
-    let args = AppArgs::try_parse().context("could not parse args")?;
+    let args = AppArgs::parse();
     let token = get_token(&args.token).await?;
     Ok(AppConfig {args, token})
 }
