@@ -1,2 +1,0 @@
-branch = "main"
-cmd = "rm -r ./build && npm ci && npm run test && node webapp"  

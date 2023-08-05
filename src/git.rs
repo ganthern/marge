@@ -3,6 +3,10 @@ use regex::Regex;
 use std::process::Command;
 use anyhow::Context;
 use std::collections::HashSet;
+use octocrab::{
+    models::{commits::Commit, issues::Issue, pulls::PullRequest, timelines::Milestone},
+    params, Octocrab, Page,
+};
 
 enum GitReturn {
     Ok = 0,
@@ -59,4 +63,22 @@ pub fn get_remotes() -> anyhow::Result<Vec<Remote>> {
     });
     set.extend(remotes);
     Ok(set.into_iter().collect())
+}
+
+
+pub async fn get_pulls(
+    instance: &Octocrab,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<Vec<PullRequest>> {
+    instance
+        .pulls(owner, repo)
+        .list()
+        .state(params::State::Open)
+        .per_page(100)
+        .page(1u8)
+        .send()
+        .await
+        .context(format!("could not get pulls for repo {}/{}", owner, repo))
+        .map(|p: Page<PullRequest>| p.items)
 }
