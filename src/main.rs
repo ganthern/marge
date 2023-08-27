@@ -8,7 +8,7 @@ pub mod merge_candidate;
 use log::*;
 
 use crate::{
-    events::{EventPump, InputEvent},
+    events::{EventPump, AppEvent},
     git::Marge,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -68,25 +68,23 @@ async fn main() -> anyhow::Result<Screen> {
     let candidates = pulls
         .into_iter()
         .map(|p| MergeCandidate::<MergeCandidateNew>::new(p));
-    info!("stuff {:#?}", candidates);
-    info!("varg: {}", marge.cmd);
-    let mut event_pump = EventPump::new(tokio::time::Duration::from_millis(1500));
+    
+    for candidate in candidates.into_iter() {
+        info!("{:?}", candidate.pull.title)
+    }
+
+    let mut event_pump = EventPump::new(tokio::time::Duration::from_millis(150));
 
     loop {
         if let Some(e) = event_pump.next().await {
             match e {
-                InputEvent::Input(k) => {
-                    if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('d') {
-                        break;
-                    } else {
-                        info!("got input {:?}", k)
-                    }
-                }
-                InputEvent::Tick => (),
-                InputEvent::Error(e) => {
+                AppEvent::Input(k) => info!("got input {:?}", k),
+                AppEvent::Tick => (),
+                AppEvent::Error(e) => {
                     info!("recvd error: {:#?}", e);
                     return Err(anyhow!(e));
                 }
+                AppEvent::Signal => break
             }
         } else {
             break;

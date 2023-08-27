@@ -2,11 +2,17 @@ use octocrab::models::pulls::PullRequest;
 
 pub trait MergeCandidateState {}
 
+#[derive(Debug)]
 pub enum MergeCandidateNew {}
+#[derive(Debug)]
 pub enum MergeCandidateRetargeted {}
+#[derive(Debug)]
 pub enum MergeCandidateCheckedOut {}
+#[derive(Debug)]
 pub enum MergeCandidateRebased {}
+#[derive(Debug)]
 pub enum MergeCandidateValidated {}
+#[derive(Debug)]
 pub enum MergeCandidatePushed {}
 
 impl MergeCandidateState for MergeCandidateNew {}
@@ -18,8 +24,9 @@ impl MergeCandidateState for MergeCandidatePushed {}
 
 pub type Successor = Option<Box<MergeCandidateNew>>;
 
+#[derive(Debug)]
 pub struct MergeCandidate<'a, S: MergeCandidateState + ?Sized> {
-    pull: octocrab::models::pulls::PullRequest,
+    pub pull: octocrab::models::pulls::PullRequest,
     successor: Successor,
     _marker: std::marker::PhantomData<&'a S>,
 }
