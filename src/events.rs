@@ -1,7 +1,9 @@
 use std::convert::Infallible;
 
 use anyhow::{anyhow, Context};
-use crossterm::event::{read, Event, EventStream, KeyCode, KeyEvent};
+use crossterm::event::{
+    read, Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
+};
 use futures::{
     future::{self, FutureExt},
     select, StreamExt,
@@ -55,12 +57,14 @@ async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Resu
             _ => None,
         })
     });
-    let mut signal_int = SignalStream::new(unix::signal(unix::SignalKind::interrupt())?); 
-    let mut signal_term = SignalStream::new(unix::signal(unix::SignalKind::interrupt())?);
+    let mut signal_int = SignalStream::new(unix::signal(unix::SignalKind::interrupt())?);
+    let mut signal_quit = SignalStream::new(unix::signal(unix::SignalKind::quit())?);
+    let mut signal_term = SignalStream::new(unix::signal(unix::SignalKind::terminate())?);
 
     let last_e = loop {
         let mut delay = Delay::new(Duration::from_millis(millis)).fuse();
         let mut sigint = signal_int.next().fuse();
+        let mut sigquit = signal_quit.next().fuse();
         let mut sigterm = signal_term.next().fuse();
         let mut event = reader.next().fuse();
 
@@ -68,7 +72,7 @@ async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Resu
             _ = delay => AppEvent::Tick,
             maybe_event = event => {
                 match maybe_event {
-                    Some(Ok(key_event)) => AppEvent::Input(key_event),
+                    Some(Ok(key_event)) => map_event(key_event),
                     Some(Err(e)) => break Err(anyhow!(e)),
                     None => break Err(anyhow!("none in event stream!")),
                 }
@@ -77,6 +81,12 @@ async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Resu
                 match maybe_sigint {
                 Some(()) => AppEvent::Signal,
                 None => break Err(anyhow!("none in sigint stream!"))
+                }
+            },
+            maybe_sigquit = sigquit => {
+                match maybe_sigquit {
+                    Some(()) => AppEvent::Signal,
+                    None => break Err(anyhow!("none in sigquit stream!"))
                 }
             },
             maybe_sigterm = sigterm => {
@@ -89,4 +99,20 @@ async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Resu
         tx.send(e).await?;
     };
     last_e
+}
+
+fn map_event(key_event: KeyEvent) -> AppEvent {
+    match key_event {
+        KeyEvent {
+            code: KeyCode::Char('d'),
+            modifiers: KeyModifiers::CONTROL,
+            ..
+        } => AppEvent::Signal,
+        KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: KeyModifiers::CONTROL,
+            ..
+        } => AppEvent::Signal,
+        _ => AppEvent::Input(key_event),
+    }
 }

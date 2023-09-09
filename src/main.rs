@@ -8,7 +8,7 @@ pub mod merge_candidate;
 use log::*;
 
 use crate::{
-    events::{EventPump, AppEvent},
+    events::{AppEvent, EventPump},
     git::Marge,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -68,7 +68,7 @@ async fn main() -> anyhow::Result<Screen> {
     let candidates = pulls
         .into_iter()
         .map(|p| MergeCandidate::<MergeCandidateNew>::new(p));
-    
+
     for candidate in candidates.into_iter() {
         info!("{:?}", candidate.pull.title)
     }
@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<Screen> {
                     info!("recvd error: {:#?}", e);
                     return Err(anyhow!(e));
                 }
-                AppEvent::Signal => break
+                AppEvent::Signal => break,
             }
         } else {
             break;
