@@ -5,15 +5,16 @@ use clap::Parser;
 pub mod events;
 mod git;
 pub mod merge_candidate;
+use git::ActivePane;
 use log::*;
 
 use crate::{
     events::{AppEvent, EventPump},
     git::Marge,
 };
-use crossterm::event::{KeyCode, KeyModifiers};
-use merge_candidate::{MergeCandidate, MergeCandidateNew, MergeCandidateState};
-use tui_logger::{TuiLoggerLevelOutput, TuiLoggerSmartWidget, TuiLoggerWidget, TuiWidgetState};
+use crossterm::event::{KeyCode, KeyEvent };
+use merge_candidate::{MergeCandidate, MergeCandidateNew };
+use tui_logger::{TuiLoggerWidget, TuiWidgetState};
 
 use ratatui::{backend::Backend, prelude::*, terminal::CompletedFrame, widgets::*, *};
 
@@ -78,7 +79,7 @@ async fn main() -> anyhow::Result<Screen> {
     loop {
         if let Some(e) = event_pump.next().await {
             match e {
-                AppEvent::Input(k) => info!("got input {:?}", k),
+                AppEvent::Input(k) => handle_input_event(&mut marge, k),
                 AppEvent::Tick => (),
                 AppEvent::Error(e) => {
                     info!("recvd error: {:#?}", e);
@@ -93,6 +94,28 @@ async fn main() -> anyhow::Result<Screen> {
     }
     Ok(screen)
 }
+
+fn handle_input_event(marge: &mut Marge, input: KeyEvent) -> () {
+    match input {
+        KeyEvent {
+            code: KeyCode::Left,
+            ..
+        }
+        | KeyEvent {
+            code: KeyCode::Right,
+            ..
+        } => {
+            marge.active_pane = if marge.active_pane == ActivePane::List {
+                ActivePane::Log
+            } else {
+                ActivePane::List
+            }
+        }
+        _ => info!("got input {:?}", input),
+    }
+}
+
+
 
 fn draw_frame<B: Backend>(t: &mut Frame<B>, marge: &mut Marge) -> () {
     let size = t.size();
@@ -139,11 +162,20 @@ fn render_content<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -
         .split(rect);
 
     render_lists(t, marge, chunks[0]);
-    render_log(t, chunks[1]);
+    render_log(t, marge, chunks[1]);
 }
 
 fn render_lists<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {
-    let lists_block = Block::default().title("App").borders(Borders::ALL);
+    let style = if marge.active_pane != ActivePane::List {
+        Style::new().fg(Color::DarkGray)
+    } else {
+        Style::new()
+    };
+
+    let lists_block = Block::default()
+        .title("App")
+        .border_style(style)
+        .borders(Borders::ALL);
     let lists_area = lists_block.inner(rect);
 
     let lists = Paragraph::new("<empty>");
@@ -151,18 +183,30 @@ fn render_lists<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> 
     t.render_widget(lists_block, rect);
 }
 
-fn render_log<B: Backend>(t: &mut Frame<B>, rect: Rect) -> () {
+fn render_log<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {
+    let style = if marge.active_pane != ActivePane::Log {
+        Style::new().fg(Color::DarkGray)
+    } else {
+        Style::new()
+    };
+
     let filter_state = TuiWidgetState::new()
         .set_default_display_level(log::LevelFilter::Info)
         .set_level_for_target("debug", log::LevelFilter::Debug)
         .set_level_for_target("error", log::LevelFilter::Error)
         .set_level_for_target("warn", log::LevelFilter::Warn)
         .set_level_for_target("info", log::LevelFilter::Info);
+
     let tui_w: TuiLoggerWidget = TuiLoggerWidget::default()
-        .block(Block::default().title("Logs").borders(Borders::ALL))
-        .output_separator('|')
-        .output_timestamp(Some("%F %H:%M:%S%.3f".to_string()))
-        .output_level(Some(TuiLoggerLevelOutput::Abbreviated))
+        .block(
+            Block::default()
+                .title("Logs")
+                .border_style(style)
+                .borders(Borders::ALL),
+        )
+        .output_separator(' ')
+        .output_timestamp(Some("%H:%M".to_string()))
+        .output_level(None)
         .output_target(false)
         .output_file(false)
         .output_line(false)

@@ -84,6 +84,12 @@ async fn get_remotes() -> anyhow::Result<Vec<Remote>> {
     };
 }
 
+#[derive(PartialEq)]
+pub enum ActivePane {
+    List,
+    Log
+}
+
 /// the main app struct
 pub struct Marge {
     pub instance: Octocrab,
@@ -91,6 +97,7 @@ pub struct Marge {
     pub cmd: String,
     pub branch: String,
     pub merge_head: Successor,
+    pub active_pane: ActivePane,
 }
 
 impl Marge {
@@ -120,6 +127,7 @@ impl Marge {
             cmd: config.args.cmd,
             branch: config.args.branch,
             merge_head: None,
+            active_pane: ActivePane::List,
         })
     }
 }
