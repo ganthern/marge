@@ -77,45 +77,21 @@ async fn main() -> anyhow::Result<Screen> {
     let mut event_pump = EventPump::new(tokio::time::Duration::from_millis(150));
 
     loop {
-        if let Some(e) = event_pump.next().await {
-            match e {
-                AppEvent::Input(k) => handle_input_event(&mut marge, k),
-                AppEvent::Tick => (),
-                AppEvent::Error(e) => {
-                    info!("recvd error: {:#?}", e);
-                    return Err(anyhow!(e));
-                }
-                AppEvent::Signal => break,
-            }
-        } else {
+        marge.last_event = if let Some(e) = event_pump.next().await { e } else { break };
+
+        if let AppEvent::Error(e) = marge.last_event {
+            info!("recvd error: {:#?}", e);
+            return Err(anyhow!(e));
+        }
+
+        if let AppEvent::Signal = marge.last_event {
             break;
         }
+
         screen.draw(|f| draw_frame(f, &mut marge))?;
     }
     Ok(screen)
 }
-
-fn handle_input_event(marge: &mut Marge, input: KeyEvent) -> () {
-    match input {
-        KeyEvent {
-            code: KeyCode::Left,
-            ..
-        }
-        | KeyEvent {
-            code: KeyCode::Right,
-            ..
-        } => {
-            marge.active_pane = if marge.active_pane == ActivePane::List {
-                ActivePane::Log
-            } else {
-                ActivePane::List
-            }
-        }
-        _ => info!("got input {:?}", input),
-    }
-}
-
-
 
 fn draw_frame<B: Backend>(t: &mut Frame<B>, marge: &mut Marge) -> () {
     let size = t.size();
@@ -160,6 +136,14 @@ fn render_content<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -
         .direction(Direction::Horizontal)
         .constraints(constraints)
         .split(rect);
+
+        if let AppEvent::Input(KeyEvent {code: KeyCode::Left, ..}) | AppEvent::Input(KeyEvent {code: KeyCode::Right, ..}) = marge.last_event {
+            marge.active_pane = if marge.active_pane == ActivePane::List {
+                ActivePane::Log
+            } else {
+                ActivePane::List
+            }
+        }
 
     render_lists(t, marge, chunks[0]);
     render_log(t, marge, chunks[1]);

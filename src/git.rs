@@ -9,7 +9,7 @@ use tui_logger::TuiWidgetState;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
-use crate::{AppArgs, AppConfig, merge_candidate::Successor, Screen};
+use crate::{AppArgs, AppConfig, merge_candidate::Successor, Screen, events::AppEvent};
 use crate::merge_candidate::{MergeCandidate, MergeCandidateState};
 use tokio::process::Command;
 
@@ -98,6 +98,7 @@ pub struct Marge {
     pub branch: String,
     pub merge_head: Successor,
     pub active_pane: ActivePane,
+    pub last_event: AppEvent,
 }
 
 impl Marge {
@@ -128,6 +129,7 @@ impl Marge {
             branch: config.args.branch,
             merge_head: None,
             active_pane: ActivePane::List,
+            last_event: AppEvent::Tick,
         })
     }
 }
