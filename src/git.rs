@@ -99,6 +99,7 @@ pub struct Marge {
     pub merge_head: Successor,
     pub active_pane: ActivePane,
     pub last_event: AppEvent,
+    pub log_state: TuiWidgetState,
 }
 
 impl Marge {
@@ -122,6 +123,13 @@ impl Marge {
         let instance = Octocrab::builder().personal_token(config.token).build()?;
         let remote = find_remote(remotes, &config.args.remote)?;
 
+        let log_state = TuiWidgetState::new()
+        .set_default_display_level(log::LevelFilter::Info)
+        .set_level_for_target("debug", log::LevelFilter::Debug)
+        .set_level_for_target("error", log::LevelFilter::Error)
+        .set_level_for_target("warn", log::LevelFilter::Warn)
+        .set_level_for_target("info", log::LevelFilter::Info);
+
         Ok(Marge {
             remote,
             instance,
@@ -130,6 +138,7 @@ impl Marge {
             merge_head: None,
             active_pane: ActivePane::List,
             last_event: AppEvent::Tick,
+            log_state
         })
     }
 }

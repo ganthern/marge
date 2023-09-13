@@ -12,9 +12,9 @@ use crate::{
     events::{AppEvent, EventPump},
     git::Marge,
 };
-use crossterm::event::{KeyCode, KeyEvent };
-use merge_candidate::{MergeCandidate, MergeCandidateNew };
-use tui_logger::{TuiLoggerWidget, TuiWidgetState};
+use crossterm::event::{KeyCode, KeyEvent};
+use merge_candidate::{MergeCandidate, MergeCandidateNew};
+use tui_logger::{TuiLoggerWidget, TuiWidgetEvent, TuiWidgetState};
 
 use ratatui::{backend::Backend, prelude::*, terminal::CompletedFrame, widgets::*, *};
 
@@ -77,7 +77,11 @@ async fn main() -> anyhow::Result<Screen> {
     let mut event_pump = EventPump::new(tokio::time::Duration::from_millis(150));
 
     loop {
-        marge.last_event = if let Some(e) = event_pump.next().await { e } else { break };
+        marge.last_event = if let Some(e) = event_pump.next().await {
+            e
+        } else {
+            break;
+        };
 
         if let AppEvent::Error(e) = marge.last_event {
             info!("recvd error: {:#?}", e);
@@ -137,19 +141,27 @@ fn render_content<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -
         .constraints(constraints)
         .split(rect);
 
-        if let AppEvent::Input(KeyEvent {code: KeyCode::Left, ..}) | AppEvent::Input(KeyEvent {code: KeyCode::Right, ..}) = marge.last_event {
-            marge.active_pane = if marge.active_pane == ActivePane::List {
-                ActivePane::Log
-            } else {
-                ActivePane::List
-            }
+    if let AppEvent::Input(KeyEvent {
+        code: KeyCode::Left,
+        ..
+    })
+    | AppEvent::Input(KeyEvent {
+        code: KeyCode::Right,
+        ..
+    }) = marge.last_event
+    {
+        marge.active_pane = if marge.active_pane == ActivePane::List {
+            ActivePane::Log
+        } else {
+            ActivePane::List
         }
+    }
 
-    render_lists(t, marge, chunks[0]);
+    render_app(t, marge, chunks[0]);
     render_log(t, marge, chunks[1]);
 }
 
-fn render_lists<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {
+fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {
     let style = if marge.active_pane != ActivePane::List {
         Style::new().fg(Color::DarkGray)
     } else {
@@ -169,17 +181,40 @@ fn render_lists<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> 
 
 fn render_log<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {
     let style = if marge.active_pane != ActivePane::Log {
+        let e = TuiWidgetEvent::EscapeKey;
+        marge.log_state.transition(&e);
         Style::new().fg(Color::DarkGray)
     } else {
+        let maybe_event = match marge.last_event {
+            AppEvent::Input(KeyEvent {
+                code: KeyCode::Up, ..
+            }) => Some(TuiWidgetEvent::PrevPageKey),
+            AppEvent::Input(KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }) => Some(TuiWidgetEvent::NextPageKey),
+            AppEvent::Input(KeyEvent {
+                code: KeyCode::Char(' '),
+                ..
+            }) => Some(TuiWidgetEvent::EscapeKey),
+            // fixme remove
+            AppEvent::Input(KeyEvent {
+                code: KeyCode::Char(c),
+                ..
+            }) => {
+                info!("{}", c);
+                None
+            }
+            _ => None,
+        };
+
+        if let Some(e) = maybe_event {
+            info!("{:?}", e);
+            marge.log_state.transition(&e);
+        }
+
         Style::new()
     };
-
-    let filter_state = TuiWidgetState::new()
-        .set_default_display_level(log::LevelFilter::Info)
-        .set_level_for_target("debug", log::LevelFilter::Debug)
-        .set_level_for_target("error", log::LevelFilter::Error)
-        .set_level_for_target("warn", log::LevelFilter::Warn)
-        .set_level_for_target("info", log::LevelFilter::Info);
 
     let tui_w: TuiLoggerWidget = TuiLoggerWidget::default()
         .block(
@@ -194,7 +229,7 @@ fn render_log<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> ()
         .output_target(false)
         .output_file(false)
         .output_line(false)
-        .state(&filter_state);
+        .state(&marge.log_state);
 
     t.render_widget(tui_w, rect);
 }
