@@ -5,7 +5,7 @@ use clap::Parser;
 pub mod events;
 mod git;
 pub mod merge_candidate;
-use git::ActivePane;
+use git::{ActivePane, AppState};
 use log::*;
 
 use crate::{
@@ -62,9 +62,10 @@ pub struct AppConfig {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<Screen> {
-    let mut screen: Screen = Screen::try_new()?;
-
     let mut marge = Marge::try_init().await?;
+    let mut screen: Screen = Screen::try_new()?;
+    let mut event_pump = EventPump::new(tokio::time::Duration::from_millis(150));
+
     let pulls = marge.get_pulls().await?;
     let candidates = pulls
         .into_iter()
@@ -74,14 +75,16 @@ async fn main() -> anyhow::Result<Screen> {
         info!("{:?}", candidate.pull.title)
     }
 
-    let mut event_pump = EventPump::new(tokio::time::Duration::from_millis(150));
-
     loop {
         marge.last_event = if let Some(e) = event_pump.next().await {
             e
         } else {
             break;
         };
+
+        if let AppEvent::Tick = marge.last_event {
+            marge.try_transition().await?;
+        }
 
         if let AppEvent::Error(e) = marge.last_event {
             info!("recvd error: {:#?}", e);
@@ -171,10 +174,18 @@ fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> ()
     let lists_block = Block::default()
         .title("App")
         .border_style(style)
+        .style(style)
         .borders(Borders::ALL);
     let lists_area = lists_block.inner(rect);
 
-    let lists = Paragraph::new("<empty>");
+    let content = match marge.app_state.as_ref() {
+        &AppState::Failed => "failed",
+        &AppState::CheckingRepo(_) => "checking repo...",
+        &AppState::GettingPulls => "gettin pulls",
+        &AppState::WaitingForCleanRepo => "cleanup repo plx...",
+        _ => "<empty>"
+    };
+    let lists = Paragraph::new(content);
     t.render_widget(lists, lists_area);
     t.render_widget(lists_block, rect);
 }
@@ -221,6 +232,8 @@ fn render_log<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> ()
             Block::default()
                 .title("Logs")
                 .border_style(style)
+                .title_style(style)
+                .style(style)
                 .borders(Borders::ALL),
         )
         .output_separator(' ')
