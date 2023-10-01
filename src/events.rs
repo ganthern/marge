@@ -10,6 +10,7 @@ use futures::{
 };
 
 use futures_timer::Delay;
+use octocrab::models::App;
 use tokio::signal::unix;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::Duration;
@@ -61,15 +62,24 @@ async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Resu
     let mut signal_quit = SignalStream::new(unix::signal(unix::SignalKind::quit())?);
     let mut signal_term = SignalStream::new(unix::signal(unix::SignalKind::terminate())?);
 
+    let mut since_last_tick = 0;
+
     let last_e = loop {
-        let mut delay = Delay::new(Duration::from_millis(millis)).fuse();
+        while since_last_tick > millis {
+            since_last_tick = since_last_tick .saturating_sub(millis)
+        }
+        let next_tick_in = millis.saturating_sub(since_last_tick);
+        let start = std::time::Instant::now();
+        let mut delay = Delay::new(Duration::from_millis(next_tick_in)).fuse();
         let mut sigint = signal_int.next().fuse();
         let mut sigquit = signal_quit.next().fuse();
         let mut sigterm = signal_term.next().fuse();
         let mut event = reader.next().fuse();
 
         let e: AppEvent = select! {
-            _ = delay => AppEvent::Tick,
+            _ = delay => {
+                AppEvent::Tick
+            },
             maybe_event = event => {
                 match maybe_event {
                     Some(Ok(key_event)) => map_event(key_event),
@@ -95,6 +105,12 @@ async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Resu
                     None => break Err(anyhow!("none in sigterm stream!"))
                 }
             }
+        };
+        since_last_tick = if let AppEvent::Tick = e {
+            0
+        } else {
+            let elapsed = start.elapsed().as_millis() as u64;
+            since_last_tick.saturating_add(elapsed)
         };
         tx.send(e).await?;
     };

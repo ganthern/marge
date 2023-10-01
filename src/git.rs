@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context};
 use clap::Parser;
+use crossterm::event::{KeyEvent, KeyCode};
 use futures::{future::Fuse, FutureExt};
 use octocrab::{
     models::{commits::Commit, issues::Issue, pulls::PullRequest, timelines::Milestone},
@@ -90,13 +91,14 @@ async fn get_remotes() -> anyhow::Result<Vec<Remote>> {
 
 fn is_repo_clean() -> Receiver<anyhow::Result<bool>> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
+    log::info!("running git status");
 
     tokio::spawn(async move {
         let result = Command::new("git")
             .args(["status", "--porcelain"])
             .output()
             .await;
-
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let _ = match result {
             Ok(output) => {
                 if output.stdout.is_empty() {
@@ -119,6 +121,7 @@ pub enum ActivePane {
     Log,
 }
 
+#[derive(Debug)]
 pub enum AppState {
     CheckingRepo(Receiver<anyhow::Result<bool>>),
     WaitingForCleanRepo,
@@ -148,7 +151,7 @@ impl Marge {
             self.app_state.as_mut(),
             match old_state {
                 AppState::CheckingRepo(rx) => transition_checking(rx).await,
-                AppState::WaitingForCleanRepo => AppState::WaitingForCleanRepo,
+                AppState::WaitingForCleanRepo => transition_waiting_clean(&self.last_event),
                 AppState::GettingPulls => AppState::GettingPulls,
                 AppState::WaitingForSort => todo!(),
                 AppState::Failed => todo!(),
@@ -249,4 +252,17 @@ async fn transition_checking(mut rx: Receiver<anyhow::Result<bool>>) -> AppState
     }
 
     AppState::CheckingRepo(rx)
+}
+
+
+/** transition out of the waiting for clean repo state */
+fn transition_waiting_clean(last_event: &AppEvent) -> AppState {
+    match last_event {
+        AppEvent::Input(KeyEvent {
+            code: KeyCode::Char(' '),
+            ..
+        }) => AppState::CheckingRepo(is_repo_clean()),
+        AppEvent::Error(_) => AppState::Failed,
+        _ => AppState::WaitingForCleanRepo,
+    }
 }

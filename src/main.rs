@@ -82,9 +82,7 @@ async fn main() -> anyhow::Result<Screen> {
             break;
         };
 
-        if let AppEvent::Tick = marge.last_event {
-            marge.try_transition().await?;
-        }
+        marge.try_transition().await?;
 
         if let AppEvent::Error(e) = marge.last_event {
             info!("recvd error: {:#?}", e);
