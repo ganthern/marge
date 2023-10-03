@@ -5,7 +5,7 @@ use clap::Parser;
 pub mod events;
 mod git;
 pub mod merge_candidate;
-use git::{ActivePane, AppState};
+use git::{ActivePane, AppState, SortingState};
 use log::*;
 use merge_candidate::MergeCandidate;
 
@@ -171,28 +171,63 @@ fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> ()
         AppState::Failed => "failed".to_owned(),
         AppState::CheckingRepo(_) => "checking repo...".to_owned(),
         AppState::WaitingForCleanRepo => "cleanup repo plx...".to_owned(),
-        AppState::CheckingOutTargetBranch(_) => format!("checking out {}", marge.branch) ,
+        AppState::CheckingOutTargetBranch(_) => format!("checking out {}", marge.branch),
         AppState::PullingRemote(_) => "pulling current state from remote...".to_owned(),
         AppState::GettingPulls => "gettin pulls...".to_owned(),
-        AppState::WaitingForSort(candidates) => format_candidates(&candidates),
+        AppState::WaitingForSort(state) => format_candidates(state),
+        AppState::CheckingOutCandidate(_) => "checkin out!".to_owned(),
     };
     let lists = Paragraph::new(content);
     t.render_widget(lists, lists_area);
     t.render_widget(lists_block, rect);
 }
 
-fn format_candidates(candidates: &[MergeCandidate]) -> String {
-    if candidates.len() == 0 {
-        return "<no pulls>".to_owned()
-    }
+fn format_candidates(state: &SortingState) -> String {
+    let chain_section = if state.merge_chain.len() == 0 {
+        "<no pulls selected>".to_owned()
+    } else {
+        state
+            .merge_chain
+            .iter()
+            .map(|c| {
+                if let Some(title) = c.pull.title.clone() {
+                    format!("Pull #{}:\n  {}", c.pull.number, title)
+                } else {
+                    format!("<no title on {}>", c.pull.number)
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    };
 
-    candidates.iter().map(|c| {
-        if let Some(title) = c.pull.title.clone() {
-            format!("Pull #{}:\n\t{}", c.pull.number, title)
-        } else {
-            format!("<no title on {}>", c.pull.number)
-        }
-    }).collect::<Vec<String>>().join("\n")
+    let unsorted_section = if state.unsorted.len() == 0 {
+        "<no pulls remaining>".to_owned()
+    } else {
+        state
+            .unsorted
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let brk = if state.current_index == i {
+                    "\n>> "
+                } else {
+                    "\n "
+                };
+
+                if let Some(title) = c.pull.title.clone() {
+                    format!("{}Pull #{}:{}  {}", brk, c.pull.number, brk, title)
+                } else {
+                    format!("{}<no title on {}>", brk, c.pull.number)
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("")
+    };
+
+    format!(
+        "Merge Chain:\n{}\n\n=====\n\n Remaining Pulls:\n{}",
+        chain_section, unsorted_section
+    )
 }
 
 fn render_log<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {

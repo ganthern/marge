@@ -1,18 +1,19 @@
 use anyhow::{anyhow, Context};
 use clap::Parser;
-use crossterm::event::{KeyEvent, KeyCode};
+use crossterm::event::{KeyCode, KeyEvent};
 use futures::FutureExt;
 use log::info;
-use octocrab::{
-    models::{pulls::PullRequest},
-    params, Octocrab, Page,
-};
+use octocrab::{current, models::pulls::{PullRequest, Merge}, params, Octocrab, Page};
 use regex::Regex;
-use std::{collections::HashSet, hash::Hasher, hash::Hash};
+use std::{collections::HashSet, hash::Hash, hash::Hasher, thread::current};
 use tokio::sync::mpsc::Receiver;
 use tui_logger::TuiWidgetState;
 
-use crate::{events::AppEvent, merge_candidate::{Successor, MergeCandidate}, AppArgs, AppConfig};
+use crate::{
+    events::AppEvent,
+    merge_candidate::{MergeCandidate},
+    AppArgs, AppConfig,
+};
 use tokio::process::Command;
 
 #[derive(Debug)]
@@ -101,14 +102,14 @@ async fn checkout_branch(branchname: &str) -> Receiver<anyhow::Result<()>> {
     log::info!("running git checkout");
     let b = branchname.to_owned();
     tokio::spawn(async move {
-        let result = Command::new("git")
-            .args(["checkout", &b])
-            .output()
-            .await;
+        let result = Command::new("git").args(["checkout", &b]).output().await;
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let _ = match result {
             Ok(output) => {
-                info!("{}", std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>"));
+                info!(
+                    "{}",
+                    std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>")
+                );
                 tx.send(Ok(()))
             }
             Err(e) => tx.send(Err(e).context("could not check repo")),
@@ -123,14 +124,14 @@ async fn pull_remote() -> Receiver<anyhow::Result<()>> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     log::info!("running git pull");
     tokio::spawn(async move {
-        let result = Command::new("git")
-            .args(["pull"])
-            .output()
-            .await;
+        let result = Command::new("git").args(["pull"]).output().await;
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let _ = match result {
             Ok(output) => {
-                info!("{}", std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>"));
+                info!(
+                    "{}",
+                    std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>")
+                );
                 tx.send(Ok(()))
             }
             Err(e) => tx.send(Err(e).context("could not check repo")),
@@ -174,13 +175,21 @@ pub enum ActivePane {
 }
 
 #[derive(Debug)]
+pub struct SortingState {
+    pub unsorted: Vec<MergeCandidate>,
+    pub current_index: usize,
+    pub merge_chain: Vec<MergeCandidate>,
+}
+
+#[derive(Debug)]
 pub enum AppState {
     CheckingRepo(Receiver<anyhow::Result<bool>>),
     WaitingForCleanRepo,
     CheckingOutTargetBranch(Receiver<anyhow::Result<()>>),
     PullingRemote(Receiver<anyhow::Result<()>>),
     GettingPulls,
-    WaitingForSort(Vec<MergeCandidate>),
+    WaitingForSort(SortingState),
+    CheckingOutCandidate(Vec<MergeCandidate>),
     Failed,
 }
 
@@ -191,7 +200,6 @@ pub struct Marge {
     pub remote: Remote,
     pub cmd: String,
     pub branch: String,
-    pub merge_head: Successor,
     pub active_pane: ActivePane,
     pub last_event: AppEvent,
     pub log_state: TuiWidgetState,
@@ -208,8 +216,11 @@ impl Marge {
                 AppState::WaitingForCleanRepo => transition_waiting_clean(&self.last_event),
                 AppState::CheckingOutTargetBranch(rx) => transition_checking_out_target(rx).await,
                 AppState::PullingRemote(rx) => transition_pull_remote(rx).await,
-                AppState::GettingPulls => transition_getting_pulls(&self.remote, &self.instance).await,
-                AppState::WaitingForSort(c) => transition_waiting_sort(c),
+                AppState::GettingPulls => {
+                    transition_getting_pulls(&self.remote, &self.instance).await
+                }
+                AppState::WaitingForSort(s) => transition_waiting_sort(&self.last_event, s),
+                AppState::CheckingOutCandidate(c) => AppState::CheckingOutCandidate(c),
                 AppState::Failed => todo!(),
             },
         );
@@ -235,7 +246,6 @@ impl Marge {
             instance,
             cmd: config.args.cmd,
             branch: config.args.branch,
-            merge_head: None,
             active_pane: ActivePane::List,
             last_event: AppEvent::Tick,
             log_state,
@@ -295,7 +305,6 @@ async fn transition_checking(mut rx: Receiver<anyhow::Result<bool>>, branchname:
     AppState::CheckingRepo(rx)
 }
 
-
 /** transition out of the waiting for clean repo state */
 fn transition_waiting_clean(last_event: &AppEvent) -> AppState {
     match last_event {
@@ -354,22 +363,86 @@ async fn transition_pull_remote(mut rx: Receiver<anyhow::Result<()>>) -> AppStat
     AppState::PullingRemote(rx)
 }
 
-
-
 async fn transition_getting_pulls(remote: &Remote, instance: &Octocrab) -> AppState {
     if let Ok(pulls) = get_pulls(remote, instance).await {
+        let candidates = pulls.into_iter().map(|p| MergeCandidate::new(p)).collect();
 
-    let candidates = pulls
-        .into_iter()
-        .map(|p| MergeCandidate::new(p))
-        .collect();
-
-        AppState::WaitingForSort(candidates)
+        AppState::WaitingForSort(SortingState {
+            unsorted: candidates,
+            current_index: 0,
+            merge_chain: vec![],
+        })
     } else {
         AppState::GettingPulls
     }
 }
 
-fn transition_waiting_sort(candidates: Vec<MergeCandidate>) -> AppState {
-    AppState::WaitingForSort(candidates)
+fn transition_waiting_sort(last_event: &AppEvent, state: SortingState) -> AppState {
+    if let AppEvent::Error(_) = last_event {
+        return AppState::Failed;
+    };
+
+    let AppEvent::Input(KeyEvent { code, .. }) = last_event else {
+        return AppState::WaitingForSort(state);
+    };
+
+    let SortingState {
+        current_index,
+        mut unsorted,
+        mut merge_chain,
+    } = state;
+
+    let new_state = match code {
+        // select prev candidate
+        KeyCode::Up => {
+            let current_index = if current_index == 0 {
+                unsorted.len() - 1
+            } else {
+                current_index - 1
+            };
+            SortingState {
+                unsorted,
+                merge_chain,
+                current_index,
+            }
+        }
+        // select next candidate
+        KeyCode::Down => {
+            let current_index = if current_index == unsorted.len() - 1 {
+                0
+            } else {
+                current_index + 1
+            };
+            SortingState {
+                unsorted,
+                merge_chain,
+                current_index,
+            }
+        }
+        // put current selected candidate at top of merge_chain
+        KeyCode::Enter => {
+            if unsorted.len() == 0 {
+                SortingState {current_index: 0, merge_chain, unsorted}
+            } else {
+                let next_head = unsorted.remove(current_index);
+                merge_chain.push(next_head);
+                SortingState {current_index: 0, merge_chain, unsorted}
+            }
+        }
+        // pop current merge_chain head back into unsorted
+        KeyCode::Esc => {
+            let head = merge_chain.pop();
+            if let Some(head) = head {
+                unsorted.push(head);
+            }
+            SortingState {current_index: 0, merge_chain, unsorted}
+        }
+        // continue to next step
+        KeyCode::Char(' ') => {
+            return AppState::CheckingOutCandidate(merge_chain);
+        }
+        _ => SortingState {merge_chain, current_index, unsorted},
+    };
+
+    AppState::WaitingForSort(new_state)
 }
