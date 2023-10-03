@@ -1,27 +1,19 @@
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use crossterm::event::{KeyEvent, KeyCode};
-use futures::{future::Fuse, FutureExt};
+use futures::FutureExt;
+use log::info;
 use octocrab::{
-    models::{commits::Commit, issues::Issue, pulls::PullRequest, timelines::Milestone},
+    models::{pulls::PullRequest},
     params, Octocrab, Page,
 };
 use regex::Regex;
-use std::collections::HashSet;
-use std::future::Future;
-use std::hash::{Hash, Hasher};
-use std::pin::Pin;
+use std::{collections::HashSet, hash::Hasher, hash::Hash};
 use tokio::sync::mpsc::Receiver;
 use tui_logger::TuiWidgetState;
 
-use crate::merge_candidate::{MergeCandidate, MergeCandidateState};
-use crate::{events::AppEvent, merge_candidate::Successor, AppArgs, AppConfig, Screen};
+use crate::{events::AppEvent, merge_candidate::{Successor, MergeCandidate}, AppArgs, AppConfig};
 use tokio::process::Command;
-
-enum GitReturn {
-    Ok = 0,
-    NotGitRepo = 128,
-}
 
 #[derive(Debug)]
 pub struct Remote {
@@ -89,6 +81,66 @@ async fn get_remotes() -> anyhow::Result<Vec<Remote>> {
     };
 }
 
+async fn get_pulls(remote: &Remote, instance: &Octocrab) -> anyhow::Result<Vec<PullRequest>> {
+    let owner = &remote.owner;
+    let repo = &remote.repo;
+    instance
+        .pulls(owner, repo)
+        .list()
+        .state(params::State::Open)
+        .per_page(100)
+        .page(1u8)
+        .send()
+        .await
+        .context(format!("could not get pulls for repo {}/{}", owner, repo))
+        .map(|p: Page<PullRequest>| p.items)
+}
+
+async fn checkout_branch(branchname: &str) -> Receiver<anyhow::Result<()>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    log::info!("running git checkout");
+    let b = branchname.to_owned();
+    tokio::spawn(async move {
+        let result = Command::new("git")
+            .args(["checkout", &b])
+            .output()
+            .await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        let _ = match result {
+            Ok(output) => {
+                info!("{}", std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>"));
+                tx.send(Ok(()))
+            }
+            Err(e) => tx.send(Err(e).context("could not check repo")),
+        }
+        .await;
+    });
+
+    rx
+}
+
+async fn pull_remote() -> Receiver<anyhow::Result<()>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    log::info!("running git pull");
+    tokio::spawn(async move {
+        let result = Command::new("git")
+            .args(["pull"])
+            .output()
+            .await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        let _ = match result {
+            Ok(output) => {
+                info!("{}", std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>"));
+                tx.send(Ok(()))
+            }
+            Err(e) => tx.send(Err(e).context("could not check repo")),
+        }
+        .await;
+    });
+
+    rx
+}
+
 fn is_repo_clean() -> Receiver<anyhow::Result<bool>> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     log::info!("running git status");
@@ -125,8 +177,10 @@ pub enum ActivePane {
 pub enum AppState {
     CheckingRepo(Receiver<anyhow::Result<bool>>),
     WaitingForCleanRepo,
+    CheckingOutTargetBranch(Receiver<anyhow::Result<()>>),
+    PullingRemote(Receiver<anyhow::Result<()>>),
     GettingPulls,
-    WaitingForSort,
+    WaitingForSort(Vec<MergeCandidate>),
     Failed,
 }
 
@@ -150,30 +204,17 @@ impl Marge {
         let _ = std::mem::replace(
             self.app_state.as_mut(),
             match old_state {
-                AppState::CheckingRepo(rx) => transition_checking(rx).await,
+                AppState::CheckingRepo(rx) => transition_checking(rx, &self.branch).await,
                 AppState::WaitingForCleanRepo => transition_waiting_clean(&self.last_event),
-                AppState::GettingPulls => AppState::GettingPulls,
-                AppState::WaitingForSort => todo!(),
+                AppState::CheckingOutTargetBranch(rx) => transition_checking_out_target(rx).await,
+                AppState::PullingRemote(rx) => transition_pull_remote(rx).await,
+                AppState::GettingPulls => transition_getting_pulls(&self.remote, &self.instance).await,
+                AppState::WaitingForSort(c) => transition_waiting_sort(c),
                 AppState::Failed => todo!(),
             },
         );
 
         Ok(())
-    }
-
-    pub async fn get_pulls(self: &Self) -> anyhow::Result<Vec<PullRequest>> {
-        let owner = &self.remote.owner;
-        let repo = &self.remote.repo;
-        self.instance
-            .pulls(owner, repo)
-            .list()
-            .state(params::State::Open)
-            .per_page(100)
-            .page(1u8)
-            .send()
-            .await
-            .context(format!("could not get pulls for repo {}/{}", owner, repo))
-            .map(|p: Page<PullRequest>| p.items)
     }
 
     pub async fn try_init() -> anyhow::Result<Marge> {
@@ -232,7 +273,7 @@ async fn get_token(file_path: &str) -> anyhow::Result<String> {
 }
 
 /** transition from the repo checking state */
-async fn transition_checking(mut rx: Receiver<anyhow::Result<bool>>) -> AppState {
+async fn transition_checking(mut rx: Receiver<anyhow::Result<bool>>, branchname: &str) -> AppState {
     {
         let ready = futures::future::ready(()).fuse();
         let nxt = rx.recv().fuse();
@@ -242,7 +283,7 @@ async fn transition_checking(mut rx: Receiver<anyhow::Result<bool>>) -> AppState
         futures::select! {
             maybe_clean = nxt => {
                 if let Some(Ok(is_clean)) = maybe_clean {
-                    return if is_clean {AppState::GettingPulls} else {AppState::WaitingForCleanRepo}
+                    return if is_clean {AppState::CheckingOutTargetBranch(checkout_branch(branchname).await)} else {AppState::WaitingForCleanRepo}
                 } else {
                     return AppState::Failed
                 }
@@ -265,4 +306,70 @@ fn transition_waiting_clean(last_event: &AppEvent) -> AppState {
         AppEvent::Error(_) => AppState::Failed,
         _ => AppState::WaitingForCleanRepo,
     }
+}
+
+async fn transition_checking_out_target(mut rx: Receiver<anyhow::Result<()>>) -> AppState {
+    {
+        let ready = futures::future::ready(()).fuse();
+        let nxt = rx.recv().fuse();
+
+        futures::pin_mut!(ready, nxt);
+
+        futures::select! {
+            maybe_clean = nxt => {
+                if let Some(Ok(_)) = maybe_clean {
+                    return AppState::PullingRemote(pull_remote().await);
+                } else {
+                    return AppState::Failed;
+                }
+            },
+            _ = ready => (),
+        };
+    }
+
+    // still waiting for the checkout...
+    AppState::CheckingOutTargetBranch(rx)
+}
+
+async fn transition_pull_remote(mut rx: Receiver<anyhow::Result<()>>) -> AppState {
+    {
+        let ready = futures::future::ready(()).fuse();
+        let nxt = rx.recv().fuse();
+
+        futures::pin_mut!(ready, nxt);
+
+        futures::select! {
+            maybe_clean = nxt => {
+                if let Some(Ok(_)) = maybe_clean {
+                    return AppState::GettingPulls;
+                } else {
+                    return AppState::Failed;
+                }
+            },
+            _ = ready => (),
+        };
+    }
+
+    // still waiting for the checkout...
+    AppState::PullingRemote(rx)
+}
+
+
+
+async fn transition_getting_pulls(remote: &Remote, instance: &Octocrab) -> AppState {
+    if let Ok(pulls) = get_pulls(remote, instance).await {
+
+    let candidates = pulls
+        .into_iter()
+        .map(|p| MergeCandidate::new(p))
+        .collect();
+
+        AppState::WaitingForSort(candidates)
+    } else {
+        AppState::GettingPulls
+    }
+}
+
+fn transition_waiting_sort(candidates: Vec<MergeCandidate>) -> AppState {
+    AppState::WaitingForSort(candidates)
 }

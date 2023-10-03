@@ -1,8 +1,7 @@
 use std::convert::Infallible;
 
-use anyhow::{anyhow, Context};
-use crossterm::event::{
-    read, Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
+use anyhow::anyhow;
+use crossterm::event::{ Event, EventStream, KeyCode, KeyEvent, KeyModifiers,
 };
 use futures::{
     future::{self, FutureExt},
@@ -10,7 +9,6 @@ use futures::{
 };
 
 use futures_timer::Delay;
-use octocrab::models::App;
 use tokio::signal::unix;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::Duration;

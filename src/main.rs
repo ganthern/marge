@@ -1,4 +1,4 @@
-use std::{fmt::format, io::Stdout, process::Termination};
+use std::{io::Stdout, process::Termination};
 
 use anyhow::anyhow;
 use clap::Parser;
@@ -7,16 +7,16 @@ mod git;
 pub mod merge_candidate;
 use git::{ActivePane, AppState};
 use log::*;
+use merge_candidate::MergeCandidate;
 
 use crate::{
     events::{AppEvent, EventPump},
     git::Marge,
 };
 use crossterm::event::{KeyCode, KeyEvent};
-use merge_candidate::{MergeCandidate, MergeCandidateNew};
-use tui_logger::{TuiLoggerWidget, TuiWidgetEvent, TuiWidgetState};
+use tui_logger::{TuiLoggerWidget, TuiWidgetEvent};
 
-use ratatui::{backend::Backend, prelude::*, terminal::CompletedFrame, widgets::*, *};
+use ratatui::{backend::Backend, prelude::*, terminal::CompletedFrame, widgets::*};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about)]
@@ -65,15 +65,6 @@ async fn main() -> anyhow::Result<Screen> {
     let mut marge = Marge::try_init().await?;
     let mut screen: Screen = Screen::try_new()?;
     let mut event_pump = EventPump::new(tokio::time::Duration::from_millis(150));
-
-    let pulls = marge.get_pulls().await?;
-    let candidates = pulls
-        .into_iter()
-        .map(|p| MergeCandidate::<MergeCandidateNew>::new(p));
-
-    for candidate in candidates.into_iter() {
-        info!("{:?}", candidate.pull.title)
-    }
 
     loop {
         marge.last_event = if let Some(e) = event_pump.next().await {
@@ -176,16 +167,32 @@ fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> ()
         .borders(Borders::ALL);
     let lists_area = lists_block.inner(rect);
 
-    let content = match marge.app_state.as_ref() {
-        &AppState::Failed => "failed",
-        &AppState::CheckingRepo(_) => "checking repo...",
-        &AppState::GettingPulls => "gettin pulls",
-        &AppState::WaitingForCleanRepo => "cleanup repo plx...",
-        _ => "<empty>"
+    let content: String = match marge.app_state.as_ref() {
+        AppState::Failed => "failed".to_owned(),
+        AppState::CheckingRepo(_) => "checking repo...".to_owned(),
+        AppState::WaitingForCleanRepo => "cleanup repo plx...".to_owned(),
+        AppState::CheckingOutTargetBranch(_) => format!("checking out {}", marge.branch) ,
+        AppState::PullingRemote(_) => "pulling current state from remote...".to_owned(),
+        AppState::GettingPulls => "gettin pulls...".to_owned(),
+        AppState::WaitingForSort(candidates) => format_candidates(&candidates),
     };
     let lists = Paragraph::new(content);
     t.render_widget(lists, lists_area);
     t.render_widget(lists_block, rect);
+}
+
+fn format_candidates(candidates: &[MergeCandidate]) -> String {
+    if candidates.len() == 0 {
+        return "<no pulls>".to_owned()
+    }
+
+    candidates.iter().map(|c| {
+        if let Some(title) = c.pull.title.clone() {
+            format!("Pull #{}:\n\t{}", c.pull.number, title)
+        } else {
+            format!("<no title on {}>", c.pull.number)
+        }
+    }).collect::<Vec<String>>().join("\n")
 }
 
 fn render_log<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {
