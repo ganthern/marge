@@ -191,7 +191,7 @@ fn format_candidates(state: &SortingState) -> String {
             .iter()
             .map(|c| {
                 if let Some(title) = c.pull.title.clone() {
-                    format!("Pull #{}:\n  {}", c.pull.number, title)
+                    format!("Pull #{}: {}\n  {}", c.pull.number, c.pull.head.ref_field, title)
                 } else {
                     format!("<no title on {}>", c.pull.number)
                 }
@@ -215,7 +215,7 @@ fn format_candidates(state: &SortingState) -> String {
                 };
 
                 if let Some(title) = c.pull.title.clone() {
-                    format!("{}Pull #{}:{}  {}", brk, c.pull.number, brk, title)
+                    format!("{}Pull #{}: {}{}  {}", brk, c.pull.number, c.pull.head.ref_field, brk, title)
                 } else {
                     format!("{}<no title on {}>", brk, c.pull.number)
                 }

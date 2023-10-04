@@ -182,6 +182,12 @@ pub struct SortingState {
 }
 
 #[derive(Debug)]
+pub struct WorkingState {
+    pub current_checkout: Option<MergeCandidate>,
+    pub next: Vec<MergeCandidate>
+}
+
+#[derive(Debug)]
 pub enum AppState {
     CheckingRepo(Receiver<anyhow::Result<bool>>),
     WaitingForCleanRepo,
@@ -189,7 +195,7 @@ pub enum AppState {
     PullingRemote(Receiver<anyhow::Result<()>>),
     GettingPulls,
     WaitingForSort(SortingState),
-    CheckingOutCandidate(Vec<MergeCandidate>),
+    CheckingOutCandidate(WorkingState),
     Failed,
 }
 
@@ -219,8 +225,8 @@ impl Marge {
                 AppState::GettingPulls => {
                     transition_getting_pulls(&self.remote, &self.instance).await
                 }
-                AppState::WaitingForSort(s) => transition_waiting_sort(&self.last_event, s),
-                AppState::CheckingOutCandidate(c) => AppState::CheckingOutCandidate(c),
+                AppState::WaitingForSort(s) => transition_waiting_sort(&self.active_pane, &self.last_event, s),
+                AppState::CheckingOutCandidate(c) => transition_checkout_candidate(c),
                 AppState::Failed => todo!(),
             },
         );
@@ -377,12 +383,16 @@ async fn transition_getting_pulls(remote: &Remote, instance: &Octocrab) -> AppSt
     }
 }
 
-fn transition_waiting_sort(last_event: &AppEvent, state: SortingState) -> AppState {
+fn transition_waiting_sort(pane: &ActivePane, last_event: &AppEvent, state: SortingState) -> AppState {
     if let AppEvent::Error(_) = last_event {
         return AppState::Failed;
     };
 
     let AppEvent::Input(KeyEvent { code, .. }) = last_event else {
+        return AppState::WaitingForSort(state);
+    };
+
+    if pane == &ActivePane::Log {
         return AppState::WaitingForSort(state);
     };
 
@@ -400,6 +410,7 @@ fn transition_waiting_sort(last_event: &AppEvent, state: SortingState) -> AppSta
             } else {
                 current_index - 1
             };
+            info!("{:?}", unsorted[current_index].pull.base.ref_field);
             SortingState {
                 unsorted,
                 merge_chain,
@@ -413,6 +424,7 @@ fn transition_waiting_sort(last_event: &AppEvent, state: SortingState) -> AppSta
             } else {
                 current_index + 1
             };
+            info!("{:?}", unsorted[current_index].pull.base.ref_field);
             SortingState {
                 unsorted,
                 merge_chain,
@@ -439,10 +451,14 @@ fn transition_waiting_sort(last_event: &AppEvent, state: SortingState) -> AppSta
         }
         // continue to next step
         KeyCode::Char(' ') => {
-            return AppState::CheckingOutCandidate(merge_chain);
+            return AppState::CheckingOutCandidate(WorkingState { current_checkout: None, next: merge_chain });
         }
         _ => SortingState {merge_chain, current_index, unsorted},
     };
 
     AppState::WaitingForSort(new_state)
+}
+
+fn transition_checkout_candidate(s: WorkingState) -> AppState {
+    AppState::CheckingOutCandidate(s)
 }
