@@ -175,7 +175,17 @@ fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> ()
         AppState::PullingRemote(_) => "pulling current state from remote...".to_owned(),
         AppState::GettingPulls => "gettin pulls...".to_owned(),
         AppState::WaitingForSort(state) => format_candidates(state),
-        AppState::CheckingOutCandidate(_) => "checkin out!".to_owned(),
+        AppState::UpdatingCandidate(s) => format!(
+            "retargeting pr {} onto {}", 
+            s.current_checkout.pull.head.ref_field, 
+            s.done.last().expect("no done????")
+        ),
+        AppState::CheckingOutCandidate(..) => "checkin out!".to_owned(),
+        AppState::RebaseCandidate(..) => "rebasing :)".to_owned(),
+        AppState::CheckingForConflicts(_) => "checkin for conflicts :D".to_owned(),
+        AppState::WaitingForResolution(_) => todo!(),
+        AppState::PushingCandidate(_) => todo!(),
+        AppState::Done => "<all done, happy merging>".to_owned(),
     };
     let lists = Paragraph::new(content);
     t.render_widget(lists, lists_area);
