@@ -182,9 +182,11 @@ fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> ()
         ),
         AppState::CheckingOutCandidate(..) => "checkin out!".to_owned(),
         AppState::RebaseCandidate(..) => "rebasing :)".to_owned(),
-        AppState::CheckingForConflicts(_) => "checkin for conflicts :D".to_owned(),
-        AppState::WaitingForResolution(_) => todo!(),
-        AppState::PushingCandidate(_) => todo!(),
+        AppState::CheckingForConflicts(..) => "checkin for conflicts :D".to_owned(),
+        AppState::WaitingForResolution(..) => "resolving conflicts".to_owned(),
+        AppState::Validating(..) => "validation".to_owned(),
+        AppState::WaitingForFix(..) => "fix validation".to_owned(),
+        AppState::PushingCandidate(..) => "pushing".to_owned(),
         AppState::Done => "<all done, happy merging>".to_owned(),
     };
     let lists = Paragraph::new(content);

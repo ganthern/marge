@@ -15,7 +15,12 @@ use octocrab::{
     Octocrab, Page,
 };
 use regex::Regex;
-use std::{collections::HashSet, hash::Hash, hash::Hasher};
+use std::{
+    collections::HashSet,
+    hash::Hash,
+    hash::Hasher,
+    process::{ExitStatus, Output},
+};
 use tokio::sync::mpsc::Receiver;
 use tui_logger::TuiWidgetState;
 
@@ -120,7 +125,10 @@ fn checkout_branch(branchname: &str) -> Receiver<anyhow::Result<()>> {
             return;
         };
 
-        info!("{}", std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>"));
+        info!(
+            "stdout: {}",
+            std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>")
+        );
         let _ = tx.send(Ok(())).await;
     });
 
@@ -137,10 +145,44 @@ fn rebase_branch(onto: &str) -> Receiver<anyhow::Result<()>> {
         let _ = match result {
             Ok(output) => {
                 info!(
-                    "{}",
+                    "stdout: {}",
                     std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>")
                 );
                 tx.send(Ok(()))
+            }
+            Err(e) => tx.send(Err(e).context("could not rebase current branch")),
+        }
+        .await;
+    });
+
+    rx
+}
+
+fn has_no_conflicts() -> Receiver<anyhow::Result<bool>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    info!("running git rebase --continue");
+    tokio::spawn(async move {
+        let result = Command::new("git")
+            .args(["rebase", "--continue", "--no-edit"])
+            .env("GIT_EDITOR", "true")
+            .output()
+            .await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        let _ = match result {
+            Ok(output) => {
+                info!(
+                    "stdout: {}",
+                    std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>")
+                );
+                info!(
+                    "stderr: {}",
+                    std::str::from_utf8(&output.stderr).unwrap_or("<invalid utf8 stderr>")
+                );
+                if let Some(0) = output.status.code() {
+                    tx.send(Ok(true))
+                } else {
+                    tx.send(Ok(false))
+                }
             }
             Err(e) => tx.send(Err(e).context("could not rebase current branch")),
         }
@@ -168,7 +210,7 @@ async fn retarget_candidate(
     Ok(())
 }
 
-async fn pull_remote() -> Receiver<anyhow::Result<()>> {
+fn pull_remote() -> Receiver<anyhow::Result<()>> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     log::info!("running git pull");
     tokio::spawn(async move {
@@ -177,12 +219,71 @@ async fn pull_remote() -> Receiver<anyhow::Result<()>> {
         let _ = match result {
             Ok(output) => {
                 info!(
-                    "{}",
+                    "stdout: {}",
                     std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>")
                 );
                 tx.send(Ok(()))
             }
             Err(e) => tx.send(Err(e).context("could not check repo")),
+        }
+        .await;
+    });
+
+    rx
+}
+
+fn push_candidate() -> Receiver<anyhow::Result<()>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    log::info!("running git push --force-with-lease");
+    tokio::spawn(async move {
+        let result = Command::new("git")
+            .args(["push", "--force-with-lease"])
+            .output()
+            .await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        let _ = match result {
+            Ok(output) => {
+                info!(
+                    "stdout: {}",
+                    std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>")
+                );
+                tx.send(Ok(()))
+            }
+            Err(e) => tx.send(Err(e).context("could not force push")),
+        }
+        .await;
+    });
+
+    rx
+}
+
+fn validate(cmd: &str) -> Receiver<anyhow::Result<bool>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let cmd = cmd.to_owned();
+    log::info!("validating: {}", cmd);
+    tokio::spawn(async move {
+        let result = Command::new("sh")
+            .args(["-c", &cmd])
+            .output()
+            .await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        let _ = match result {
+            Ok(output) => {
+                info!(
+                    "stdout: {}",
+                    std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>")
+                );
+                info!(
+                    "stderr: {}",
+                    std::str::from_utf8(&output.stderr).unwrap_or("<invalid utf8 stderr>")
+                );
+                if let Some(0) = output.status.code() {
+                    tx.send(Ok(true))
+                } else {
+                    tx.send(Ok(false))
+                }
+            }
+            Err(e) => tx.send(Err(e).context("could not validate current branch")),
         }
         .await;
     });
@@ -247,9 +348,11 @@ pub enum AppState {
     UpdatingCandidate(WorkingState),
     CheckingOutCandidate(Receiver<anyhow::Result<()>>, WorkingState),
     RebaseCandidate(Receiver<anyhow::Result<()>>, WorkingState),
-    CheckingForConflicts(WorkingState),
+    CheckingForConflicts(Receiver<anyhow::Result<bool>>, WorkingState),
     WaitingForResolution(WorkingState),
-    PushingCandidate(WorkingState),
+    Validating(Receiver<anyhow::Result<bool>>, WorkingState),
+    WaitingForFix(WorkingState),
+    PushingCandidate(Receiver<anyhow::Result<()>>, WorkingState),
     Done,
     Failed,
 }
@@ -288,9 +391,13 @@ impl Marge {
                 }
                 AppState::CheckingOutCandidate(rx, c) => transition_checkout_candidate(rx, c).await,
                 AppState::RebaseCandidate(rx, s) => transition_rebasing(rx, s).await,
-                AppState::CheckingForConflicts(s) => AppState::CheckingForConflicts(s),
-                AppState::WaitingForResolution(s) => todo!(),
-                AppState::PushingCandidate(s) => todo!(),
+                AppState::CheckingForConflicts(rx, s) => transition_check_conflicts(&self.cmd, rx, s).await,
+                AppState::WaitingForResolution(s) => {
+                    transition_waiting_resolution(&self.last_event, s)
+                }
+                AppState::Validating(rx, s) => transition_validate(rx, s).await,
+                AppState::WaitingForFix(s) => transition_fixing(&self.last_event,&self.cmd, s),
+                AppState::PushingCandidate(rx, s) => transition_pushing(rx, s).await,
                 AppState::Done => AppState::Done,
                 AppState::Failed => AppState::Failed,
             },
@@ -388,6 +495,17 @@ fn transition_waiting_clean(last_event: &AppEvent) -> AppState {
     }
 }
 
+fn transition_waiting_resolution(last_event: &AppEvent, s: WorkingState) -> AppState {
+    match last_event {
+        AppEvent::Input(KeyEvent {
+            code: KeyCode::Char(' '),
+            ..
+        }) => AppState::CheckingForConflicts(has_no_conflicts(), s),
+        AppEvent::Error(_) => AppState::Failed,
+        _ => AppState::WaitingForResolution(s),
+    }
+}
+
 async fn transition_checking_out_target(mut rx: Receiver<anyhow::Result<()>>) -> AppState {
     {
         let ready = futures::future::ready(()).fuse();
@@ -398,7 +516,7 @@ async fn transition_checking_out_target(mut rx: Receiver<anyhow::Result<()>>) ->
         futures::select! {
             maybe_clean = nxt => {
                 if let Some(Ok(_)) = maybe_clean {
-                    return AppState::PullingRemote(pull_remote().await);
+                    return AppState::PullingRemote(pull_remote());
                 } else {
                     return AppState::Failed;
                 }
@@ -643,7 +761,8 @@ async fn transition_rebasing(mut rx: Receiver<anyhow::Result<()>>, s: WorkingSta
             maybe_rebased = nxt => {
                 info!("{:?}", maybe_rebased);
                 if let Some(Ok(_)) = maybe_rebased {
-                    return AppState::CheckingForConflicts(s)
+                    let rx = has_no_conflicts();
+                    return AppState::CheckingForConflicts(rx, s)
                 } else {
                     return AppState::Failed;
                 }
@@ -652,6 +771,111 @@ async fn transition_rebasing(mut rx: Receiver<anyhow::Result<()>>, s: WorkingSta
         };
     }
 
-    // still waiting for the checkout...
+    // still waiting for the rebase...
     AppState::RebaseCandidate(rx, s)
+}
+
+async fn transition_check_conflicts(
+    cmd: &str,
+    mut rx: Receiver<anyhow::Result<bool>>,
+    s: WorkingState,
+) -> AppState {
+    {
+        let ready = futures::future::ready(()).fuse();
+        let nxt = rx.recv().fuse();
+
+        futures::pin_mut!(ready, nxt);
+
+        futures::select! {
+            maybe_conflicts_state = nxt => {
+                if let Some(Ok(no_conflicts)) = maybe_conflicts_state {
+                    return if no_conflicts {
+                        let rx = validate(cmd);
+                        AppState::Validating(rx, s)
+                    } else {
+                        AppState::WaitingForResolution(s)
+                    }
+                } else {
+                    return AppState::Failed
+                }
+            },
+            _ = ready => (),
+        };
+    }
+
+    AppState::CheckingForConflicts(rx, s)
+}
+
+async fn transition_validate(mut rx: Receiver<anyhow::Result<bool>>, s: WorkingState) -> AppState {
+    {
+        let ready = futures::future::ready(()).fuse();
+        let nxt = rx.recv().fuse();
+
+        futures::pin_mut!(ready, nxt);
+
+        futures::select! {
+            maybe_validated = nxt => {
+                info!("{:?}", maybe_validated);
+                if let Some(Ok(is_validated)) = maybe_validated {
+                    if is_validated {
+                        let rx = push_candidate();
+                        return AppState::PushingCandidate(rx, s);
+                    } else {
+                        return AppState::WaitingForFix(s);
+                    }
+                } else {
+                    return AppState::Failed;
+                }
+            },
+            _ = ready => (),
+        };
+    }
+
+    // still waiting for validation...
+    AppState::Validating(rx, s)
+}
+
+
+async fn transition_pushing(mut rx: Receiver<anyhow::Result<()>>, s: WorkingState) -> AppState {
+    {
+        let ready = futures::future::ready(()).fuse();
+        let nxt = rx.recv().fuse();
+
+        futures::pin_mut!(ready, nxt);
+
+        futures::select! {
+            maybe_rebased = nxt => {
+                info!("{:?}", maybe_rebased);
+                if let Some(Ok(_)) = maybe_rebased {
+                    if s.next.len() == 0 {
+                        return AppState::Done;
+                    } else {
+                        let mut done = s.done;
+                        done.push(s.current_checkout.pull.head.ref_field);
+                        let mut next = s.next;
+                        let current_checkout = next.remove(0);
+                        let new_s = WorkingState {current_checkout, next, done};
+                        return AppState::UpdatingCandidate(new_s);
+                    }
+                } else {
+                    return AppState::Failed;
+                }
+            },
+            _ = ready => (),
+        };
+    }
+
+    // still waiting for the push...
+    AppState::PushingCandidate(rx, s)
+}
+
+fn transition_fixing(last_event: &AppEvent, cmd: &str, s: WorkingState) -> AppState {
+    match last_event {
+        AppEvent::Input(KeyEvent {
+            code: KeyCode::Char(' '),
+            ..
+        }) => AppState::Validating(validate(cmd), s),
+        AppEvent::Error(_) => AppState::Failed,
+        _ => AppState::WaitingForFix(s),
+    }
 }
