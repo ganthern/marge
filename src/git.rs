@@ -3,17 +3,9 @@ use clap::Parser;
 use crossterm::event::{KeyCode, KeyEvent};
 use futures::FutureExt;
 use log::info;
-use octocrab::{
-    models::pulls::PullRequest,
-    params,
-    Octocrab, Page,
-};
+use octocrab::{models::pulls::PullRequest, params, Octocrab, Page};
 use regex::Regex;
-use std::{
-    collections::HashSet,
-    hash::Hash,
-    hash::Hasher,
-};
+use std::{collections::HashSet, hash::Hash, hash::Hasher};
 use tokio::sync::mpsc::Receiver;
 use tui_logger::TuiWidgetState;
 
@@ -40,7 +32,7 @@ impl Hash for Remote {
     where
         H: Hasher,
     {
-        self.name.hash(hasher)
+        self.name.hash(hasher);
     }
 }
 
@@ -79,11 +71,11 @@ async fn get_remotes() -> anyhow::Result<Vec<Remote>> {
     });
     set.extend(remotes);
 
-    return if set.len() > 0 {
-        Ok(set.into_iter().collect())
-    } else {
+    if set.is_empty() {
         Err(anyhow!("not enough remotes!"))
-    };
+    } else {
+        Ok(set.into_iter().collect())
+    }
 }
 
 async fn get_pulls(remote: &Remote, instance: &Octocrab) -> anyhow::Result<Vec<PullRequest>> {
@@ -97,7 +89,7 @@ async fn get_pulls(remote: &Remote, instance: &Octocrab) -> anyhow::Result<Vec<P
         .page(1u8)
         .send()
         .await
-        .context(format!("could not get pulls for repo {}/{}", owner, repo))
+        .context(format!("could not get pulls for repo {owner}/{repo}"))
         .map(|p: Page<PullRequest>| p.items)
 }
 
@@ -130,17 +122,15 @@ fn checkout_branch(branchname: &str) -> Receiver<anyhow::Result<()>> {
 
 fn rebase_branch(onto: &str) -> Receiver<anyhow::Result<()>> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    log::info!("running git rebase");
+    info!("running git rebase onto {onto}");
     let b = onto.to_owned();
     tokio::spawn(async move {
         let result = Command::new("git").args(["rebase", &b]).output().await;
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let _ = match result {
             Ok(output) => {
-                info!(
-                    "stdout: {}",
-                    std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>")
-                );
+                let o = std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>");
+                info!("stdout: {o}",);
                 tx.send(Ok(()))
             }
             Err(e) => tx.send(Err(e).context("could not rebase current branch")),
@@ -255,10 +245,7 @@ fn validate(cmd: &str) -> Receiver<anyhow::Result<bool>> {
     let cmd = cmd.to_owned();
     log::info!("validating: {}", cmd);
     tokio::spawn(async move {
-        let result = Command::new("sh")
-            .args(["-c", &cmd])
-            .output()
-            .await;
+        let result = Command::new("sh").args(["-c", &cmd]).output().await;
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let _ = match result {
             Ok(output) => {
@@ -384,12 +371,14 @@ impl Marge {
                 }
                 AppState::CheckingOutCandidate(rx, c) => transition_checkout_candidate(rx, c).await,
                 AppState::RebaseCandidate(rx, s) => transition_rebasing(rx, s).await,
-                AppState::CheckingForConflicts(rx, s) => transition_check_conflicts(&self.cmd, rx, s).await,
+                AppState::CheckingForConflicts(rx, s) => {
+                    transition_check_conflicts(&self.cmd, rx, s).await
+                }
                 AppState::WaitingForResolution(s) => {
                     transition_waiting_resolution(&self.last_event, s)
                 }
                 AppState::Validating(rx, s) => transition_validate(rx, s).await,
-                AppState::WaitingForFix(s) => transition_fixing(&self.last_event,&self.cmd, s),
+                AppState::WaitingForFix(s) => transition_fixing(&self.last_event, &self.cmd, s),
                 AppState::PushingCandidate(rx, s) => transition_pushing(rx, s).await,
                 AppState::Done => AppState::Done,
                 AppState::Failed => AppState::Failed,
@@ -436,7 +425,7 @@ fn find_remote(mut remotes: Vec<Remote>, target: &str) -> anyhow::Result<Remote>
                 None
             }
         })
-        .context(format!("could not find remote {}", target))
+        .context(format!("could not find remote {target}"))
 }
 
 async fn get_config() -> anyhow::Result<AppConfig> {
@@ -457,19 +446,18 @@ async fn get_token(file_path: &str) -> anyhow::Result<String> {
 async fn transition_checking(mut rx: Receiver<anyhow::Result<bool>>, branchname: &str) -> AppState {
     {
         let ready = futures::future::ready(()).fuse();
-        let nxt = rx.recv().fuse();
+        let task = rx.recv().fuse();
 
-        futures::pin_mut!(ready, nxt);
+        futures::pin_mut!(ready, task);
 
         futures::select! {
-            maybe_clean = nxt => {
+            maybe_clean = task => {
                 if let Some(Ok(is_clean)) = maybe_clean {
                     return if is_clean {AppState::CheckingOutTargetBranch(checkout_branch(branchname))} else {AppState::WaitingForCleanRepo}
-                } else {
-                    return AppState::Failed
                 }
+                return AppState::Failed;
             },
-            _ = ready => (),
+            () = ready => (),
         };
     }
 
@@ -508,13 +496,13 @@ async fn transition_checking_out_target(mut rx: Receiver<anyhow::Result<()>>) ->
 
         futures::select! {
             maybe_clean = nxt => {
-                if let Some(Ok(_)) = maybe_clean {
+                if let Some(Ok(())) = maybe_clean {
                     return AppState::PullingRemote(pull_remote());
-                } else {
-                    return AppState::Failed;
                 }
+                return AppState::Failed;
+
             },
-            _ = ready => (),
+            () = ready => (),
         };
     }
 
@@ -531,13 +519,12 @@ async fn transition_pull_remote(mut rx: Receiver<anyhow::Result<()>>) -> AppStat
 
         futures::select! {
             maybe_clean = nxt => {
-                if let Some(Ok(_)) = maybe_clean {
+                if let Some(Ok(())) = maybe_clean {
                     return AppState::GettingPulls;
-                } else {
-                    return AppState::Failed;
                 }
+                return AppState::Failed;
             },
-            _ = ready => (),
+            () = ready => (),
         };
     }
 
@@ -547,7 +534,7 @@ async fn transition_pull_remote(mut rx: Receiver<anyhow::Result<()>>) -> AppStat
 
 async fn transition_getting_pulls(remote: &Remote, instance: &Octocrab) -> AppState {
     if let Ok(pulls) = get_pulls(remote, instance).await {
-        let candidates = pulls.into_iter().map(|p| MergeCandidate::new(p)).collect();
+        let candidates = pulls.into_iter().map(MergeCandidate::new).collect();
 
         AppState::WaitingForSort(SortingState {
             unsorted: candidates,
@@ -593,8 +580,8 @@ fn transition_waiting_sort(
             };
             SortingState {
                 unsorted,
-                merge_chain,
                 current_index,
+                merge_chain,
             }
         }
         // select next candidate
@@ -606,13 +593,13 @@ fn transition_waiting_sort(
             };
             SortingState {
                 unsorted,
-                merge_chain,
                 current_index,
+                merge_chain,
             }
         }
         // put current selected candidate at top of merge_chain
         KeyCode::Enter => {
-            if unsorted.len() == 0 {
+            if unsorted.is_empty() {
                 SortingState {
                     current_index: 0,
                     merge_chain,
@@ -642,22 +629,21 @@ fn transition_waiting_sort(
         }
         // continue to next step
         KeyCode::Char(' ') => {
-            if merge_chain.len() > 0 {
-                let current_checkout = merge_chain.remove(0);
-                let s = WorkingState {
-                    current_checkout,
-                    next: merge_chain,
-                    done: vec![branch.to_owned()],
-                };
-                return AppState::UpdatingCandidate(s);
-            } else {
+            if merge_chain.is_empty() {
                 return AppState::Done;
             }
+            let current_checkout = merge_chain.remove(0);
+            let s = WorkingState {
+                current_checkout,
+                next: merge_chain,
+                done: vec![branch.to_owned()],
+            };
+            return AppState::UpdatingCandidate(s);
         }
         _ => SortingState {
-            merge_chain,
-            current_index,
             unsorted,
+            current_index,
+            merge_chain,
         },
     };
 
@@ -680,7 +666,7 @@ async fn transition_updating_candidate(
         remote,
         instance,
         &current_checkout,
-        &done.last().expect("empty done list?"),
+        done.last().expect("empty done list?"),
     )
     .await
     else {
@@ -721,15 +707,14 @@ async fn transition_checkout_candidate(
 
         futures::select! {
             maybe_checked_out = nxt => {
-                if let Some(Ok(_)) = maybe_checked_out {
+                if let Some(Ok(())) = maybe_checked_out {
                     let rx_reb = rebase_branch(done.last().expect("empty done?"));
                     let new_s = WorkingState {current_checkout, next, done};
                     return AppState::RebaseCandidate(rx_reb, new_s)
-                } else {
-                    return AppState::Failed
                 }
+                return AppState::Failed;
             },
-            _ = ready => (),
+            () = ready => (),
         };
     }
 
@@ -746,21 +731,20 @@ async fn transition_checkout_candidate(
 async fn transition_rebasing(mut rx: Receiver<anyhow::Result<()>>, s: WorkingState) -> AppState {
     {
         let ready = futures::future::ready(()).fuse();
-        let nxt = rx.recv().fuse();
+        let task = rx.recv().fuse();
 
-        futures::pin_mut!(ready, nxt);
+        futures::pin_mut!(ready, task);
 
         futures::select! {
-            maybe_rebased = nxt => {
+            maybe_rebased = task => {
                 info!("{:?}", maybe_rebased);
-                if let Some(Ok(_)) = maybe_rebased {
+                if let Some(Ok(())) = maybe_rebased {
                     let rx = has_no_conflicts();
                     return AppState::CheckingForConflicts(rx, s)
-                } else {
-                    return AppState::Failed;
                 }
+                return AppState::Failed;
             },
-            _ = ready => (),
+            () = ready => (),
         };
     }
 
@@ -775,24 +759,23 @@ async fn transition_check_conflicts(
 ) -> AppState {
     {
         let ready = futures::future::ready(()).fuse();
-        let nxt = rx.recv().fuse();
+        let task = rx.recv().fuse();
 
-        futures::pin_mut!(ready, nxt);
+        futures::pin_mut!(ready, task);
 
         futures::select! {
-            maybe_conflicts_state = nxt => {
+            maybe_conflicts_state = task => {
                 if let Some(Ok(no_conflicts)) = maybe_conflicts_state {
                     return if no_conflicts {
                         let rx = validate(cmd);
                         AppState::Validating(rx, s)
                     } else {
                         AppState::WaitingForResolution(s)
-                    }
-                } else {
-                    return AppState::Failed
+                    };
                 }
+                return AppState::Failed;
             },
-            _ = ready => (),
+            () = ready => (),
         };
     }
 
@@ -802,25 +785,23 @@ async fn transition_check_conflicts(
 async fn transition_validate(mut rx: Receiver<anyhow::Result<bool>>, s: WorkingState) -> AppState {
     {
         let ready = futures::future::ready(()).fuse();
-        let nxt = rx.recv().fuse();
+        let task = rx.recv().fuse();
 
-        futures::pin_mut!(ready, nxt);
+        futures::pin_mut!(ready, task);
 
         futures::select! {
-            maybe_validated = nxt => {
+            maybe_validated = task => {
                 info!("{:?}", maybe_validated);
                 if let Some(Ok(is_validated)) = maybe_validated {
                     if is_validated {
                         let rx = push_candidate();
                         return AppState::PushingCandidate(rx, s);
-                    } else {
-                        return AppState::WaitingForFix(s);
                     }
-                } else {
-                    return AppState::Failed;
+                    return AppState::WaitingForFix(s);
                 }
+                return AppState::Failed;
             },
-            _ = ready => (),
+            () = ready => (),
         };
     }
 
@@ -828,33 +809,31 @@ async fn transition_validate(mut rx: Receiver<anyhow::Result<bool>>, s: WorkingS
     AppState::Validating(rx, s)
 }
 
-
 async fn transition_pushing(mut rx: Receiver<anyhow::Result<()>>, s: WorkingState) -> AppState {
     {
         let ready = futures::future::ready(()).fuse();
-        let nxt = rx.recv().fuse();
+        let task = rx.recv().fuse();
 
-        futures::pin_mut!(ready, nxt);
+        futures::pin_mut!(ready, task);
 
         futures::select! {
-            maybe_rebased = nxt => {
+            maybe_rebased = task => {
                 info!("{:?}", maybe_rebased);
-                if let Some(Ok(_)) = maybe_rebased {
-                    if s.next.len() == 0 {
+                if let Some(Ok(())) = maybe_rebased {
+                    if s.next.is_empty() {
                         return AppState::Done;
-                    } else {
-                        let mut done = s.done;
-                        done.push(s.current_checkout.pull.head.ref_field);
-                        let mut next = s.next;
-                        let current_checkout = next.remove(0);
-                        let new_s = WorkingState {current_checkout, next, done};
-                        return AppState::UpdatingCandidate(new_s);
                     }
-                } else {
-                    return AppState::Failed;
+                    let mut done = s.done;
+                    done.push(s.current_checkout.pull.head.ref_field);
+                    let mut next = s.next;
+                    let current_checkout = next.remove(0);
+                    let new_s = WorkingState {current_checkout, next, done};
+                    return AppState::UpdatingCandidate(new_s);
                 }
+
+                return AppState::Failed;
             },
-            _ = ready => (),
+            () = ready => (),
         };
     }
 

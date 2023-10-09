@@ -1,13 +1,11 @@
 use std::{io::Stdout, process::Termination};
 
-use anyhow::anyhow;
 use clap::Parser;
 pub mod events;
 mod git;
 pub mod merge_candidate;
 use git::{ActivePane, AppState, SortingState};
-use log::*;
-use merge_candidate::MergeCandidate;
+use log::{LevelFilter, info};
 
 use crate::{
     events::{AppEvent, EventPump},
@@ -16,7 +14,7 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent};
 use tui_logger::{TuiLoggerWidget, TuiWidgetEvent};
 
-use ratatui::{backend::Backend, prelude::*, terminal::CompletedFrame, widgets::*};
+use ratatui::{backend::Backend, prelude::*, terminal::CompletedFrame, widgets::{Block, Borders, Paragraph}};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about)]
@@ -77,7 +75,7 @@ async fn main() -> anyhow::Result<Screen> {
 
         if let AppEvent::Error(e) = marge.last_event {
             info!("recvd error: {:#?}", e);
-            return Err(anyhow!(e));
+            return Err(e);
         }
 
         if let AppEvent::Signal = marge.last_event {
@@ -89,7 +87,7 @@ async fn main() -> anyhow::Result<Screen> {
     Ok(screen)
 }
 
-fn draw_frame<B: Backend>(t: &mut Frame<B>, marge: &mut Marge) -> () {
+fn draw_frame<B: Backend>(t: &mut Frame<B>, marge: &mut Marge) {
     let size = t.size();
 
     let main_block = Block::default().borders(Borders::NONE);
@@ -110,7 +108,7 @@ fn draw_frame<B: Backend>(t: &mut Frame<B>, marge: &mut Marge) -> () {
     render_content(t, marge, chunks[1]);
 }
 
-fn render_title<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {
+fn render_title<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
     let title_block = Block::default().borders(Borders::ALL);
     let title_area = title_block.inner(rect);
 
@@ -122,7 +120,7 @@ fn render_title<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> 
     t.render_widget(title_block, rect);
 }
 
-fn render_content<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {
+fn render_content<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
     let constraints = vec![
         Constraint::Percentage(50), // lists
         Constraint::Percentage(50), // log
@@ -133,14 +131,7 @@ fn render_content<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -
         .constraints(constraints)
         .split(rect);
 
-    if let AppEvent::Input(KeyEvent {
-        code: KeyCode::Left,
-        ..
-    })
-    | AppEvent::Input(KeyEvent {
-        code: KeyCode::Right,
-        ..
-    }) = marge.last_event
+    if let AppEvent::Input(KeyEvent { code: KeyCode::Left | KeyCode::Right, .. }) = marge.last_event
     {
         marge.active_pane = if marge.active_pane == ActivePane::List {
             ActivePane::Log
@@ -153,11 +144,11 @@ fn render_content<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -
     render_log(t, marge, chunks[1]);
 }
 
-fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {
-    let style = if marge.active_pane != ActivePane::List {
-        Style::new().fg(Color::DarkGray)
-    } else {
+fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
+    let style = if marge.active_pane == ActivePane::List {
         Style::new()
+    } else {
+        Style::new().fg(Color::DarkGray)
     };
 
     let lists_block = Block::default()
@@ -195,7 +186,7 @@ fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> ()
 }
 
 fn format_candidates(state: &SortingState) -> String {
-    let chain_section = if state.merge_chain.len() == 0 {
+    let chain_section = if state.merge_chain.is_empty() {
         "<no pulls selected>".to_owned()
     } else {
         state
@@ -212,7 +203,7 @@ fn format_candidates(state: &SortingState) -> String {
             .join("\n")
     };
 
-    let unsorted_section = if state.unsorted.len() == 0 {
+    let unsorted_section = if state.unsorted.is_empty() {
         "<no pulls remaining>".to_owned()
     } else {
         state
@@ -227,27 +218,21 @@ fn format_candidates(state: &SortingState) -> String {
                 };
 
                 if let Some(title) = c.pull.title.clone() {
-                    format!("{}Pull #{}: {}{}  {}", brk, c.pull.number, c.pull.head.ref_field, brk, title)
+                    format!("{brk}Pull #{}: {}{brk}  {title}", c.pull.number, c.pull.head.ref_field)
                 } else {
                     format!("{}<no title on {}>", brk, c.pull.number)
                 }
             })
-            .collect::<Vec<String>>()
-            .join("")
+            .collect::<String>()
     };
 
     format!(
-        "Merge Chain:\n{}\n\n=====\n\n Remaining Pulls:\n{}",
-        chain_section, unsorted_section
+        "Merge Chain:\n{chain_section}\n\n=====\n\n Remaining Pulls:\n{unsorted_section}"
     )
 }
 
-fn render_log<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> () {
-    let style = if marge.active_pane != ActivePane::Log {
-        let e = TuiWidgetEvent::EscapeKey;
-        marge.log_state.transition(&e);
-        Style::new().fg(Color::DarkGray)
-    } else {
+fn render_log<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
+    let style = if marge.active_pane == ActivePane::Log {
         let maybe_event = match marge.last_event {
             AppEvent::Input(KeyEvent {
                 code: KeyCode::Up, ..
@@ -277,6 +262,10 @@ fn render_log<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) -> ()
         }
 
         Style::new()
+    } else {
+        let e = TuiWidgetEvent::EscapeKey;
+        marge.log_state.transition(&e);
+        Style::new().fg(Color::DarkGray)
     };
 
     let tui_w: TuiLoggerWidget = TuiLoggerWidget::default()
@@ -332,10 +321,10 @@ impl Termination for Screen {
         use std::process::ExitCode;
 
         if let Err(e) = execute!(self.0.backend_mut(), LeaveAlternateScreen) {
-            eprintln!("{:?}", e);
+            eprintln!("{e:?}");
             ExitCode::FAILURE
         } else if let Err(e) = disable_raw_mode() {
-            eprintln!("{:?}", e);
+            eprintln!("{e:?}");
             ExitCode::FAILURE
         } else {
             ExitCode::SUCCESS

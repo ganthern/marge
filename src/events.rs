@@ -29,13 +29,17 @@ pub struct EventPump {
 }
 
 impl EventPump {
-    pub fn new(tick_rate: Duration) -> EventPump {
+    #[must_use] pub fn new(tick_rate: Duration) -> EventPump {
         let (tx, rx) = channel(10);
         let sent_tx = tx.clone();
         tokio::spawn(async move {
             let result = poll_events(tick_rate, &sent_tx).await;
-            let err = result.err().unwrap();
-            let _ = sent_tx.send(AppEvent::Error(err)).await;
+            let _ = if let Err(err) = result {
+                sent_tx.send(AppEvent::Error(err)).await
+            } else {
+                let err = anyhow!("event ended without err?"); 
+                sent_tx.send(AppEvent::Error(err)).await
+            };
         });
         EventPump { rx, _tx: tx }
     }
@@ -48,7 +52,7 @@ impl EventPump {
 }
 
 async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Result<Infallible> {
-    let millis = tick_rate.as_millis() as u64;
+    let millis = u64::try_from(tick_rate.as_millis())?;
     let mut reader = EventStream::new().filter_map(|e| {
         future::ready(match e {
             Ok(Event::Key(key_event)) => Some(Ok(key_event)),
@@ -64,7 +68,7 @@ async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Resu
 
     let last_e = loop {
         while since_last_tick > millis {
-            since_last_tick = since_last_tick .saturating_sub(millis)
+            since_last_tick = since_last_tick .saturating_sub(millis);
         }
         let next_tick_in = millis.saturating_sub(since_last_tick);
         let start = std::time::Instant::now();
@@ -75,7 +79,7 @@ async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Resu
         let mut event = reader.next().fuse();
 
         let e: AppEvent = select! {
-            _ = delay => {
+            () = delay => {
                 AppEvent::Tick
             },
             maybe_event = event => {
@@ -107,7 +111,7 @@ async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Resu
         since_last_tick = if let AppEvent::Tick = e {
             0
         } else {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = u64::try_from(start.elapsed().as_millis())?;
             since_last_tick.saturating_add(elapsed)
         };
         tx.send(e).await?;
@@ -118,12 +122,7 @@ async fn poll_events(tick_rate: Duration, tx: &Sender<AppEvent>) -> anyhow::Resu
 fn map_event(key_event: KeyEvent) -> AppEvent {
     match key_event {
         KeyEvent {
-            code: KeyCode::Char('d'),
-            modifiers: KeyModifiers::CONTROL,
-            ..
-        } => AppEvent::Signal,
-        KeyEvent {
-            code: KeyCode::Char('c'),
+            code: KeyCode::Char('d' | 'c'),
             modifiers: KeyModifiers::CONTROL,
             ..
         } => AppEvent::Signal,
