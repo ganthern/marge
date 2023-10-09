@@ -147,7 +147,7 @@ fn has_no_conflicts() -> Receiver<anyhow::Result<bool>> {
     info!("running git rebase --continue");
     tokio::spawn(async move {
         let result = Command::new("git")
-            .args(["rebase", "--continue", "--no-edit"])
+            .args(["rebase", "--continue"])
             .env("GIT_EDITOR", "true")
             .output()
             .await;
