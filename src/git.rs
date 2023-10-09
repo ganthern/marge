@@ -4,14 +4,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 use futures::FutureExt;
 use log::info;
 use octocrab::{
-    current,
-    models::{
-        pulls::{Merge, PullRequest},
-        webhook_events::payload::WorkflowRunWebhookEventAction,
-        workflows,
-    },
+    models::pulls::PullRequest,
     params,
-    pulls::UpdatePullRequestBuilder,
     Octocrab, Page,
 };
 use regex::Regex;
@@ -19,7 +13,6 @@ use std::{
     collections::HashSet,
     hash::Hash,
     hash::Hasher,
-    process::{ExitStatus, Output},
 };
 use tokio::sync::mpsc::Receiver;
 use tui_logger::TuiWidgetState;
@@ -562,7 +555,7 @@ async fn transition_getting_pulls(remote: &Remote, instance: &Octocrab) -> AppSt
             merge_chain: vec![],
         })
     } else {
-        AppState::GettingPulls
+        AppState::Failed
     }
 }
 
