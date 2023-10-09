@@ -120,7 +120,8 @@ fn checkout_branch(branchname: &str) -> Receiver<anyhow::Result<()>> {
     rx
 }
 
-fn rebase_branch(onto: &str) -> Receiver<anyhow::Result<()>> {
+/** return true if done */
+fn rebase_branch(onto: &str) -> Receiver<anyhow::Result<bool>> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     info!("running git rebase onto {onto}");
     let b = onto.to_owned();
@@ -131,7 +132,7 @@ fn rebase_branch(onto: &str) -> Receiver<anyhow::Result<()>> {
             Ok(output) => {
                 let o = std::str::from_utf8(&output.stdout).unwrap_or("<invalid utf8 output>");
                 info!("stdout: {o}",);
-                tx.send(Ok(()))
+                tx.send(Ok(output.status.success()))
             }
             Err(e) => tx.send(Err(e).context("could not rebase current branch")),
         }
@@ -146,7 +147,7 @@ fn has_no_conflicts() -> Receiver<anyhow::Result<bool>> {
     info!("running git rebase --continue");
     tokio::spawn(async move {
         let result = Command::new("git")
-            .args(["rebase", "--continue", "--no-edit"])
+            .args(["rebase", "--continue"])
             .env("GIT_EDITOR", "true")
             .output()
             .await;
@@ -327,7 +328,7 @@ pub enum AppState {
     WaitingForSort(SortingState),
     UpdatingCandidate(WorkingState),
     CheckingOutCandidate(Receiver<anyhow::Result<()>>, WorkingState),
-    RebaseCandidate(Receiver<anyhow::Result<()>>, WorkingState),
+    RebaseCandidate(Receiver<anyhow::Result<bool>>, WorkingState),
     CheckingForConflicts(Receiver<anyhow::Result<bool>>, WorkingState),
     WaitingForResolution(WorkingState),
     Validating(Receiver<anyhow::Result<bool>>, WorkingState),
@@ -370,7 +371,7 @@ impl Marge {
                     transition_updating_candidate(&self.remote, &self.instance, s).await
                 }
                 AppState::CheckingOutCandidate(rx, c) => transition_checkout_candidate(rx, c).await,
-                AppState::RebaseCandidate(rx, s) => transition_rebasing(rx, s).await,
+                AppState::RebaseCandidate(rx, s) => transition_rebasing(&self.cmd, rx, s).await,
                 AppState::CheckingForConflicts(rx, s) => {
                     transition_check_conflicts(&self.cmd, rx, s).await
                 }
@@ -728,7 +729,11 @@ async fn transition_checkout_candidate(
     )
 }
 
-async fn transition_rebasing(mut rx: Receiver<anyhow::Result<()>>, s: WorkingState) -> AppState {
+async fn transition_rebasing(
+    cmd: &str,
+    mut rx: Receiver<anyhow::Result<bool>>,
+    s: WorkingState,
+) -> AppState {
     {
         let ready = futures::future::ready(()).fuse();
         let task = rx.recv().fuse();
@@ -738,9 +743,13 @@ async fn transition_rebasing(mut rx: Receiver<anyhow::Result<()>>, s: WorkingSta
         futures::select! {
             maybe_rebased = task => {
                 info!("{:?}", maybe_rebased);
-                if let Some(Ok(())) = maybe_rebased {
-                    let rx = has_no_conflicts();
-                    return AppState::CheckingForConflicts(rx, s)
+                if let Some(Ok(done)) = maybe_rebased {
+                    return if done {
+                        AppState::Validating(validate(cmd), s)
+                    } else {
+                        let rx = has_no_conflicts();
+                        AppState::CheckingForConflicts(rx, s)
+                    };
                 }
                 return AppState::Failed;
             },
