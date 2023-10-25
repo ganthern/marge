@@ -13,8 +13,4 @@ impl MergeCandidate {
     #[must_use] pub fn retarget(self) -> MergeCandidate {
         MergeCandidate { pull: self.pull, }
     }
-
-    pub fn merge(self) {
-
-    }
 }

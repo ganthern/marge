@@ -315,7 +315,12 @@ pub struct SortingState {
 pub struct WorkingState {
     pub current_checkout: MergeCandidate,
     pub next: Vec<MergeCandidate>,
-    pub done: Vec<String>,
+    pub done: Vec<MergeCandidate>,
+}
+
+#[derive(Debug)]
+pub struct MergingState {
+    pub to_merge: Vec<MergeCandidate>
 }
 
 #[derive(Debug)]
@@ -334,6 +339,7 @@ pub enum AppState {
     Validating(Receiver<anyhow::Result<bool>>, WorkingState),
     WaitingForFix(WorkingState),
     PushingCandidate(Receiver<anyhow::Result<()>>, WorkingState),
+    Merging(MergingState),
     Done,
     Failed,
 }
@@ -365,12 +371,12 @@ impl Marge {
                     transition_getting_pulls(&self.remote, &self.instance).await
                 }
                 AppState::WaitingForSort(s) => {
-                    transition_waiting_sort(&self.active_pane, &self.last_event, &self.branch, s)
+                    transition_waiting_sort(&self.active_pane, &self.last_event, s)
                 }
                 AppState::UpdatingCandidate(s) => {
-                    transition_updating_candidate(&self.remote, &self.instance, s).await
+                    transition_updating_candidate(&self.branch, &self.remote, &self.instance, s).await
                 }
-                AppState::CheckingOutCandidate(rx, c) => transition_checkout_candidate(rx, c).await,
+                AppState::CheckingOutCandidate(rx, c) => transition_checkout_candidate(&self.branch, rx, c).await,
                 AppState::RebaseCandidate(rx, s) => transition_rebasing(&self.cmd, rx, s).await,
                 AppState::CheckingForConflicts(rx, s) => {
                     transition_check_conflicts(&self.cmd, rx, s).await
@@ -381,6 +387,7 @@ impl Marge {
                 AppState::Validating(rx, s) => transition_validate(rx, s).await,
                 AppState::WaitingForFix(s) => transition_fixing(&self.last_event, &self.cmd, s),
                 AppState::PushingCandidate(rx, s) => transition_pushing(rx, s).await,
+                AppState::Merging(s) => transition_merging(&self.instance, &self.remote, s).await,
                 AppState::Done => AppState::Done,
                 AppState::Failed => AppState::Failed,
             },
@@ -550,7 +557,6 @@ async fn transition_getting_pulls(remote: &Remote, instance: &Octocrab) -> AppSt
 fn transition_waiting_sort(
     pane: &ActivePane,
     last_event: &AppEvent,
-    branch: &str,
     state: SortingState,
 ) -> AppState {
     if let AppEvent::Error(_) = last_event {
@@ -637,7 +643,7 @@ fn transition_waiting_sort(
             let s = WorkingState {
                 current_checkout,
                 next: merge_chain,
-                done: vec![branch.to_owned()],
+                done: vec![],
             };
             return AppState::UpdatingCandidate(s);
         }
@@ -653,6 +659,7 @@ fn transition_waiting_sort(
 
 /** update the current candidate to point at the previous candidates head, then start checking it out. */
 async fn transition_updating_candidate(
+    branch: &str,
     remote: &Remote,
     instance: &Octocrab,
     s: WorkingState,
@@ -667,7 +674,9 @@ async fn transition_updating_candidate(
         remote,
         instance,
         &current_checkout,
-        done.last().expect("empty done list?"),
+        &done.last()
+        .map(|c| c.pull.head.ref_field.clone())
+        .unwrap_or(branch.to_owned())
     )
     .await
     else {
@@ -686,6 +695,7 @@ async fn transition_updating_candidate(
 }
 
 async fn transition_checkout_candidate(
+    branch: &str,
     mut rx: Receiver<anyhow::Result<()>>,
     s: WorkingState,
 ) -> AppState {
@@ -709,7 +719,10 @@ async fn transition_checkout_candidate(
         futures::select! {
             maybe_checked_out = nxt => {
                 if let Some(Ok(())) = maybe_checked_out {
-                    let rx_reb = rebase_branch(done.last().expect("empty done?"));
+                    let next_base = done.last()
+                    .map(|c| c.pull.head.ref_field.clone())
+                    .unwrap_or(branch.to_owned());
+                    let rx_reb = rebase_branch(&next_base);
                     let new_s = WorkingState {current_checkout, next, done};
                     return AppState::RebaseCandidate(rx_reb, new_s)
                 }
@@ -829,17 +842,26 @@ async fn transition_pushing(mut rx: Receiver<anyhow::Result<()>>, s: WorkingStat
             maybe_rebased = task => {
                 info!("{:?}", maybe_rebased);
                 if let Some(Ok(())) = maybe_rebased {
-                    if s.next.is_empty() {
-                        return AppState::Done;
-                    }
                     let mut done = s.done;
-                    done.push(s.current_checkout.pull.head.ref_field);
+                    done.push(s.current_checkout);
                     let mut next = s.next;
-                    let current_checkout = next.remove(0);
-                    let new_s = WorkingState {current_checkout, next, done};
-                    return AppState::UpdatingCandidate(new_s);
-                }
+                    
 
+                    return if next.is_empty() {
+                        let new_s = MergingState {
+                            to_merge: done
+                        };
+                        AppState::Merging(new_s)
+                    } else {
+                        let current_checkout = next.remove(0);
+                        let new_s = WorkingState {
+                            current_checkout, 
+                            next, 
+                            done
+                        };
+                        AppState::UpdatingCandidate(new_s)
+                    };
+                }
                 return AppState::Failed;
             },
             () = ready => (),
@@ -859,4 +881,27 @@ fn transition_fixing(last_event: &AppEvent, cmd: &str, s: WorkingState) -> AppSt
         AppEvent::Error(_) => AppState::Failed,
         _ => AppState::WaitingForFix(s),
     }
+}
+
+async fn transition_merging(
+    instance: &Octocrab,
+    remote: &Remote, 
+    mut s: MergingState
+) ->  AppState {
+    loop {
+        if s.to_merge.is_empty() { break};
+        let next = s.to_merge.pop().expect("no next?");
+
+        let id = next.pull.id;
+        let page = instance
+        .pulls(&remote.owner, &remote.repo).merge(*id)
+        .method(params::pulls::MergeMethod::Rebase)
+        .send()
+        .await;
+        match page {
+            Err(_e) => return AppState::Failed,
+            Ok(p) => info!("merged? {:?}", p.merged)
+        }
+    }
+    AppState::Done
 }

@@ -14,7 +14,7 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent};
 use tui_logger::{TuiLoggerWidget, TuiWidgetEvent};
 
-use ratatui::{backend::Backend, prelude::*, terminal::CompletedFrame, widgets::{Block, Borders, Paragraph}};
+use ratatui::{widgets::{Paragraph, Borders, block::Block}, prelude::*, terminal::CompletedFrame};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about)]
@@ -25,7 +25,7 @@ use ratatui::{backend::Backend, prelude::*, terminal::CompletedFrame, widgets::{
 ///
 /// will get the PRs for the current git repositories' github page,
 /// then ask for a desired order to merge them in. after that, each branch will in turn be
-///
+/// 
 /// * checked out
 ///
 /// * rebased onto its predecessor
@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<Screen> {
     Ok(screen)
 }
 
-fn draw_frame<B: Backend>(t: &mut Frame<B>, marge: &mut Marge) {
+fn draw_frame(t: &mut Frame, marge: &mut Marge) {
     let size = t.size();
 
     let main_block = Block::default().borders(Borders::NONE);
@@ -108,7 +108,7 @@ fn draw_frame<B: Backend>(t: &mut Frame<B>, marge: &mut Marge) {
     render_content(t, marge, chunks[1]);
 }
 
-fn render_title<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
+fn render_title(t: &mut Frame, marge: &mut Marge, rect: Rect) {
     let title_block = Block::default().borders(Borders::ALL);
     let title_area = title_block.inner(rect);
 
@@ -120,7 +120,7 @@ fn render_title<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
     t.render_widget(title_block, rect);
 }
 
-fn render_content<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
+fn render_content(t: &mut Frame, marge: &mut Marge, rect: Rect) {
     let constraints = vec![
         Constraint::Percentage(50), // lists
         Constraint::Percentage(50), // log
@@ -144,7 +144,7 @@ fn render_content<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
     render_log(t, marge, chunks[1]);
 }
 
-fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
+fn render_app(t: &mut Frame, marge: &mut Marge, rect: Rect) {
     let style = if marge.active_pane == ActivePane::List {
         Style::new()
     } else {
@@ -169,7 +169,9 @@ fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
         AppState::UpdatingCandidate(s) => format!(
             "retargeting pr {} onto {}", 
             s.current_checkout.pull.head.ref_field, 
-            s.done.last().expect("no done????")
+            s.done.last()
+            .map(|c| c.pull.head.ref_field.clone())
+            .unwrap_or(marge.branch.clone())
         ),
         AppState::CheckingOutCandidate(..) => "checkin out!".to_owned(),
         AppState::RebaseCandidate(..) => "rebasing :)".to_owned(),
@@ -178,6 +180,7 @@ fn render_app<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
         AppState::Validating(..) => "validation".to_owned(),
         AppState::WaitingForFix(..) => "fix validation".to_owned(),
         AppState::PushingCandidate(..) => "pushing".to_owned(),
+        AppState::Merging(..) => "merging".to_owned(),
         AppState::Done => "<all done, happy merging>".to_owned(),
     };
     let lists = Paragraph::new(content);
@@ -231,7 +234,7 @@ fn format_candidates(state: &SortingState) -> String {
     )
 }
 
-fn render_log<B: Backend>(t: &mut Frame<B>, marge: &mut Marge, rect: Rect) {
+fn render_log(t: &mut Frame, marge: &mut Marge, rect: Rect) {
     let style = if marge.active_pane == ActivePane::Log {
         let maybe_event = match marge.last_event {
             AppEvent::Input(KeyEvent {
@@ -306,7 +309,7 @@ impl Screen {
 
     pub fn draw<F>(&mut self, f: F) -> Result<CompletedFrame<'_>, std::io::Error>
     where
-        F: FnOnce(&mut Frame<CrosstermBackend<Stdout>>),
+        F: FnOnce(&mut Frame),
     {
         self.0.draw(f)
     }
