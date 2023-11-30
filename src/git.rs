@@ -325,20 +325,35 @@ pub struct MergingState {
 
 #[derive(Debug)]
 pub enum AppState {
+    /// make sure that the current state of the repo is clean
     CheckingRepo(Receiver<anyhow::Result<bool>>),
+    /// waiting for the user to tell us to check again...
     WaitingForCleanRepo,
+    /// check out our target branch
     CheckingOutTargetBranch(Receiver<anyhow::Result<()>>),
+    /// pull the latest state from the remote
     PullingRemote(Receiver<anyhow::Result<()>>),
+    /// get the list of open pull requests
     GettingPulls,
+    /// wait for the user to select the pulls to be merged
     WaitingForSort(SortingState),
+    /// change the base of the current pull request to the previous one (or target)
     UpdatingCandidate(WorkingState),
+    /// check out the branch belonging to the current pull request
     CheckingOutCandidate(Receiver<anyhow::Result<()>>, WorkingState),
+    /// run rebase on the current branch
     RebaseCandidate(Receiver<anyhow::Result<bool>>, WorkingState),
+    /// check if the rebase resulted in conflicts
     CheckingForConflicts(Receiver<anyhow::Result<bool>>, WorkingState),
+    /// wait for the user to manually fix the results and then signal
     WaitingForResolution(WorkingState),
+    /// check that the rebased branch passes the validation statement
     Validating(Receiver<anyhow::Result<bool>>, WorkingState),
+    /// wait for the user to fix any errors and signal us
     WaitingForFix(WorkingState),
+    /// force-push the branch to the remote
     PushingCandidate(Receiver<anyhow::Result<()>>, WorkingState),
+    /// merge all the pulls that were rebased
     Merging(MergingState),
     Done,
     Failed,
