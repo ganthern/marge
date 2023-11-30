@@ -450,7 +450,7 @@ async fn get_token(file_path: &str) -> anyhow::Result<String> {
         .await
         .context("could not read token")?;
     let contents = std::str::from_utf8(&contents_bytes).context("token is not valid utf8")?;
-    Ok(contents.to_owned())
+    Ok(contents.trim().to_owned())
 }
 
 /** transition from the repo checking state */
