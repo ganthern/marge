@@ -66,6 +66,7 @@ pub struct AppConfig {
 async fn main() -> anyhow::Result<Screen> {
     let mut marge = Marge::try_init().await?;
     let mut screen: Screen = Screen::try_new()?;
+    info!("running validation against {}", marge.cmd);
     let mut event_pump = EventPump::new(tokio::time::Duration::from_millis(150));
 
     loop {
