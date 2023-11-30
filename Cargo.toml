@@ -14,7 +14,7 @@ tokio = { version = "1.17", default-features = false, features = [
     "process",
     "signal"
 ] }
-clap = { version = "4.3.19", features = ["derive"] }
+clap = { version = "4.4.10", features = ["derive"] }
 regex = "1.9.1"
 futures = "0.3"
 anyhow = "1.0.72"
