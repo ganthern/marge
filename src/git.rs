@@ -893,6 +893,7 @@ async fn transition_merging(instance: &Octocrab, remote: &Remote, s: MergingStat
         pull: PullRequest { number, title, .. },
     } in to_merge
     {
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
         info!(
             "merging pull {number} with {}",
             title.unwrap_or("<untitled>".to_string())
@@ -904,7 +905,10 @@ async fn transition_merging(instance: &Octocrab, remote: &Remote, s: MergingStat
             .send()
             .await;
         match result {
-            Err(_e) => return AppState::Failed,
+            Err(e) => {
+                info!("failed with {:?}", e);
+                return AppState::Failed;
+            }
             Ok(p) => info!("merged? {:?}", p.merged),
         }
     }

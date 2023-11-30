@@ -166,9 +166,9 @@ fn render_app(t: &mut Frame, marge: &mut Marge, rect: Rect) {
     let lists_area = lists_block.inner(rect);
 
     let content: String = match marge.app_state.as_ref() {
-        AppState::Failed => "failed".to_owned(),
+        AppState::Failed => "<failed>".to_owned(),
         AppState::CheckingRepo(_) => "checking repo...".to_owned(),
-        AppState::WaitingForCleanRepo => "cleanup repo plx...".to_owned(),
+        AppState::WaitingForCleanRepo => "cleanup repo, then press space".to_owned(),
         AppState::CheckingOutTargetBranch(_) => format!("checking out {}", marge.branch),
         AppState::PullingRemote(_) => "pulling current state from remote...".to_owned(),
         AppState::GettingPulls => "gettin pulls...".to_owned(),
@@ -184,12 +184,14 @@ fn render_app(t: &mut Frame, marge: &mut Marge, rect: Rect) {
         AppState::CheckingOutCandidate(..) => "checkin out!".to_owned(),
         AppState::RebaseCandidate(..) => "rebasing :)".to_owned(),
         AppState::CheckingForConflicts(..) => "checkin for conflicts :D".to_owned(),
-        AppState::WaitingForResolution(..) => "resolving conflicts".to_owned(),
+        AppState::WaitingForResolution(..) => {
+            "resolve conflicts, then press space to rebase continue".to_owned()
+        }
         AppState::Validating(..) => "validation".to_owned(),
-        AppState::WaitingForFix(..) => "fix validation".to_owned(),
+        AppState::WaitingForFix(..) => "fix validation, then press space".to_owned(),
         AppState::PushingCandidate(..) => "pushing".to_owned(),
         AppState::Merging(..) => "merging".to_owned(),
-        AppState::Done => "<all done, happy merging>".to_owned(),
+        AppState::Done => "<all done>".to_owned(),
     };
     let lists = Paragraph::new(content);
     t.render_widget(lists, lists_area);
