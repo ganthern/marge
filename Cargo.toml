@@ -17,7 +17,6 @@ tokio = { version = "1.17", default-features = false, features = [
 clap = { version = "4.3.19", features = ["derive"] }
 regex = "1.9.1"
 futures = "0.3"
-octocrab = { path = "../octocrab" }
 anyhow = "1.0.72"
 url = { version = "2.2.2", features = ["serde"] }
 
@@ -27,6 +26,7 @@ log = "0.4.19"
 tui-logger = { git = "https://github.com/ganthern/tui-logger.git", version = "0.9.3"}
 ratatui = { version = "0.24.0" }
 tokio-stream = { version = "0.1.14", features = ["signal"] }
+octocrab = "0.32.0"
 
 [profile.release]
 opt-level = "z"

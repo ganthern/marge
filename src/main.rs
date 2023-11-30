@@ -5,7 +5,7 @@ pub mod events;
 mod git;
 pub mod merge_candidate;
 use git::{ActivePane, AppState, SortingState};
-use log::{LevelFilter, info};
+use log::{info, LevelFilter};
 
 use crate::{
     events::{AppEvent, EventPump},
@@ -14,7 +14,11 @@ use crate::{
 use crossterm::event::{KeyCode, KeyEvent};
 use tui_logger::{TuiLoggerWidget, TuiWidgetEvent};
 
-use ratatui::{widgets::{Paragraph, Borders, block::Block}, prelude::*, terminal::CompletedFrame};
+use ratatui::{
+    prelude::*,
+    terminal::CompletedFrame,
+    widgets::{block::Block, Borders, Paragraph},
+};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about)]
@@ -25,7 +29,7 @@ use ratatui::{widgets::{Paragraph, Borders, block::Block}, prelude::*, terminal:
 ///
 /// will get the PRs for the current git repositories' github page,
 /// then ask for a desired order to merge them in. after that, each branch will in turn be
-/// 
+///
 /// * checked out
 ///
 /// * rebased onto its predecessor
@@ -131,7 +135,10 @@ fn render_content(t: &mut Frame, marge: &mut Marge, rect: Rect) {
         .constraints(constraints)
         .split(rect);
 
-    if let AppEvent::Input(KeyEvent { code: KeyCode::Left | KeyCode::Right, .. }) = marge.last_event
+    if let AppEvent::Input(KeyEvent {
+        code: KeyCode::Left | KeyCode::Right,
+        ..
+    }) = marge.last_event
     {
         marge.active_pane = if marge.active_pane == ActivePane::List {
             ActivePane::Log
@@ -167,11 +174,12 @@ fn render_app(t: &mut Frame, marge: &mut Marge, rect: Rect) {
         AppState::GettingPulls => "gettin pulls...".to_owned(),
         AppState::WaitingForSort(state) => format_candidates(state),
         AppState::UpdatingCandidate(s) => format!(
-            "retargeting pr {} onto {}", 
-            s.current_checkout.pull.head.ref_field, 
-            s.done.last()
-            .map(|c| c.pull.head.ref_field.clone())
-            .unwrap_or(marge.branch.clone())
+            "retargeting pr {} onto {}",
+            s.current_checkout.pull.head.ref_field,
+            s.done
+                .last()
+                .map(|c| c.pull.head.ref_field.clone())
+                .unwrap_or(marge.branch.clone())
         ),
         AppState::CheckingOutCandidate(..) => "checkin out!".to_owned(),
         AppState::RebaseCandidate(..) => "rebasing :)".to_owned(),
@@ -197,7 +205,10 @@ fn format_candidates(state: &SortingState) -> String {
             .iter()
             .map(|c| {
                 if let Some(title) = c.pull.title.clone() {
-                    format!("Pull #{}: {}\n  {}", c.pull.number, c.pull.head.ref_field, title)
+                    format!(
+                        "Pull #{}: {}\n  {}",
+                        c.pull.number, c.pull.head.ref_field, title
+                    )
                 } else {
                     format!("<no title on {}>", c.pull.number)
                 }
@@ -221,7 +232,10 @@ fn format_candidates(state: &SortingState) -> String {
                 };
 
                 if let Some(title) = c.pull.title.clone() {
-                    format!("{brk}Pull #{}: {}{brk}  {title}", c.pull.number, c.pull.head.ref_field)
+                    format!(
+                        "{brk}Pull #{}: {}{brk}  {title}",
+                        c.pull.number, c.pull.head.ref_field
+                    )
                 } else {
                     format!("{}<no title on {}>", brk, c.pull.number)
                 }
@@ -229,9 +243,7 @@ fn format_candidates(state: &SortingState) -> String {
             .collect::<String>()
     };
 
-    format!(
-        "Merge Chain:\n{chain_section}\n\n=====\n\n Remaining Pulls:\n{unsorted_section}"
-    )
+    format!("Merge Chain:\n{chain_section}\n\n=====\n\n Remaining Pulls:\n{unsorted_section}")
 }
 
 fn render_log(t: &mut Frame, marge: &mut Marge, rect: Rect) {
