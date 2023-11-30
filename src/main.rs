@@ -274,7 +274,6 @@ fn render_log(t: &mut Frame, marge: &mut Marge, rect: Rect) {
         };
 
         if let Some(e) = maybe_event {
-            info!("{:?}", e);
             marge.log_state.transition(&e);
         }
 
