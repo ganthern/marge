@@ -887,24 +887,27 @@ fn transition_fixing(last_event: &AppEvent, cmd: &str, s: WorkingState) -> AppSt
     }
 }
 
-async fn transition_merging(instance: &Octocrab, remote: &Remote, mut s: MergingState) -> AppState {
-    loop {
-        if s.to_merge.is_empty() {
-            break;
-        };
-        let next = s.to_merge.pop().expect("no next?");
-
-        let id = next.pull.id;
-        let page = instance
+async fn transition_merging(instance: &Octocrab, remote: &Remote, s: MergingState) -> AppState {
+    let MergingState { to_merge } = s;
+    for MergeCandidate {
+        pull: PullRequest { number, title, .. },
+    } in to_merge
+    {
+        info!(
+            "merging pull {number} with {}",
+            title.unwrap_or("<untitled>".to_string())
+        );
+        let result = instance
             .pulls(&remote.owner, &remote.repo)
-            .merge(*id)
+            .merge(number)
             .method(params::pulls::MergeMethod::Rebase)
             .send()
             .await;
-        match page {
+        match result {
             Err(_e) => return AppState::Failed,
             Ok(p) => info!("merged? {:?}", p.merged),
         }
     }
+
     AppState::Done
 }
